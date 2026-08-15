@@ -8,6 +8,8 @@
 - 🔒 多会话并发安全：专用 COM 线程 + 单实例语义，实测 8 线程并发 8/8 通过
 - 🛡 不崩溃：所有错误返回结构化 JSON + 中文排查提示
 
+![示例输出图](docs/example.png)
+
 ```
 DSH 对话（多会话并发）
    │  mcp__origin__origin_plot_file / origin_write_data / ...
