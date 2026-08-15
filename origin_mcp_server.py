@@ -29,12 +29,13 @@ import origin_engine as engine
 
 mcp = MCPServer(
     name="origin",
-    version="1.0.1",
+    version="1.1.0",
     instructions=(
         "Origin 科学绘图工具（连接本机 Origin 2026b 自动化服务器）。"
-        "推荐直接用 origin_plot_file 一次完成 写数据->画图->导出文件；"
-        "也可分步使用 origin_write_data / origin_plot / origin_export。"
-        "所有工具都返回 JSON 对象，ok 字段表示成败。"
+        "画图/分析前先调用 origin_help 获取速查（秒回，含数据格式与 10 个任务模板），"
+        "然后按模板直接调用；推荐一键 origin_plot_file（写数据->画图->导出文件），"
+        "或分步 origin_write_data / origin_plot / origin_export。"
+        "所有工具都返回 JSON 对象，ok 字段表示成败，失败时读 error/hint。"
     ),
 )
 
@@ -44,8 +45,21 @@ mcp = MCPServer(
 # ---------------------------------------------------------------------------
 @mcp.tool()
 def origin_status() -> dict:
-    """检查 Origin 连接状态与插件环境（先调用它可确认 Origin 是否可用）。"""
+    """检查 Origin 连接状态与插件环境（先调用它可确认 Origin 是否可用）。
+
+    首次调用会自动启动 Origin（约 5~45 秒）；返回 plot_types / default_output_dir。
+    """
     return engine.status()
+
+
+@mcp.tool()
+def origin_help() -> dict:
+    """【优先调用】快速使用速查：工具清单、数据格式、典型调用模板。
+
+    画图/分析前先调用本工具（不连接 Origin，秒回），按返回的 templates 直接调用，
+    无需阅读任何文档。包含：数据格式、16 个工具用途、10 个常用任务模板。
+    """
+    return engine.help()
 
 
 @mcp.tool()
@@ -372,6 +386,13 @@ def _mcp_test():
                 print("== mcp-test: list_tools ==")
                 print(names)
                 assert "origin_plot_file" in names and "origin_status" in names
+                assert "origin_help" in names and "origin_fit" in names
+
+                print("== mcp-test: call origin_help ==")
+                res = await session.call_tool("origin_help", {})
+                help_out = _first_text(res)
+                assert '"ok": true' in help_out and "templates" in help_out
+                print(help_out[:200])
 
                 print("== mcp-test: call origin_status ==")
                 res = await session.call_tool("origin_status", {})

@@ -28,6 +28,10 @@ Origin64.exe（单实例 COM 自动化服务器）
 
 ## 快速开始
 
+> 🚀 **模型快速上手**：本插件自带 DSH 原生 **`origin-plotting` skill**（安装后自动注册，
+> 见下方「skill 速查」），模型画图前加载 skill 或调用 `origin_help` 即可秒懂用法，
+> **无需阅读本 README**。
+
 ### 1. 环境要求
 
 - Windows + 已安装 [Origin](https://www.originlab.com/)（实测 OriginPro 2026b；2018+ 一般均可）
@@ -84,6 +88,19 @@ powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\dsh_origin_plugin\regist
 | 「用 Origin 画 y=x²（x=1..10）的折线图，导出 PNG」 | `mcp__origin__origin_plot_file` |
 | 「把这两列数据画成散点图导出 SVG：x=[1,2,3,4,5], y=[3.1,4.9,7.2,8.8,11.3]」 | `mcp__origin__origin_plot_file` |
 | 「先写数据再分步画图、导出」 | `origin_write_data` → `origin_plot` → `origin_export` |
+
+## 快速上手（skill + origin_help）
+
+模型在对话中遇到 Origin 画图/分析任务时，有两种秒级上手通道：
+
+1. **`origin-plotting` skill（DSH 原生机制）**：安装时自动写入
+   `%APPDATA%\dsh-desktop\harness\skills\origin-plotting\SKILL.md` 与
+   `~/.dsh\skills\origin-plotting\SKILL.md`。模型目录可见该 skill，按需加载后
+   直接获得：数据格式、16 工具速查表、10 个任务模板——**不用再读 README**；
+2. **`mcp__origin__origin_help` 工具**：不连接 Origin、约 1ms 返回同一份速查
+   （JSON 格式，含 usage/tools/templates/tips），任何时刻可调用。
+
+两者内容一致、互为备份；工具 description 中也已内嵌快速用法提示。
 
 ## 工具清单
 

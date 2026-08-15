@@ -1214,6 +1214,59 @@ def _status_impl():
     return info
 
 
+def _help_impl():
+    """快速使用速查（不连接 Origin，秒回）。模型画图前调用一次即可上手。"""
+    return {
+        "ok": True,
+        "usage": (
+            "最快路径：origin_plot_file(columns={'x':[...], 'y':[...]}, "
+            "plot_type='line'|'scatter'|'line_symbol'|'column', fmt='png'|'svg', "
+            "file_path='可选绝对路径', width=1200, title='可选') -> "
+            "返回 {'ok': true, 'file': '绝对路径'}。"
+        ),
+        "data_format": {
+            "columns": "dict {列名: [数值列表]}，第一列自动设为 X，其余为 Y；也可传二维列表 [[..],[..]] 或一维列表",
+            "worksheet": "write_data 返回的 '[Book]Sheet' 引用，供 plot/fit/filter 等使用",
+            "graph": "plot 返回的图短名，供 export 使用",
+        },
+        "tools": {
+            "origin_status": "检查连接（Origin 未启动会自动启动，首连 5~45 秒）",
+            "origin_write_data": "写多列数据 -> 返回 worksheet",
+            "origin_plot": "画图（含 histogram/box/bar + yerr_column 误差棒）-> 返回 graph",
+            "origin_export": "导出 PNG/SVG -> 返回 file 绝对路径",
+            "origin_plot_file": "一键 写数+画图+导出 -> 返回 file（最常用）",
+            "origin_filter_data": "删点/裁剪（drop_rows 索引 或 x_min/x_max）",
+            "origin_fit": "拟合 kind=linear 或 Origin 函数名(ExpDec1/Gauss/Polynomial/...)，拟合曲线上图",
+            "origin_plot3d": "3D surface(需 {'z': 2D网格}) / scatter(需 {'x','y','z'})",
+            "origin_stats": "描述统计 count/mean/std/min/p25/median/p75/max/skew",
+            "origin_transform": "smooth/normalize/derivative/interpolate（写回新列）",
+            "origin_integrate": "梯形法 AUC",
+            "origin_fft": "FFT 频谱（top 主频 + plot_spectrum 频谱图）",
+            "origin_correlate": "Pearson 相关矩阵",
+            "origin_peak_find": "峰值检测（min_height/min_distance）",
+            "origin_histogram": "直方图统计（plot=True 画图导出）",
+            "origin_plot_contour": "等高线 contour/contour_fill/3d_wire（需 {'z': 2D网格}）",
+        },
+        "templates": [
+            "折线图: origin_plot_file(columns, plot_type='line')",
+            "散点图: origin_plot_file(columns, plot_type='scatter')",
+            "直方图: origin_histogram(worksheet, column, bins=10, plot=True)",
+            "箱线图: origin_plot(worksheet, y_columns=[col], plot_type='box')",
+            "误差棒: origin_plot(worksheet, y_columns=[y], x_column=x, yerr_column=err)",
+            "拟合: origin_write_data -> origin_fit(worksheet, kind='ExpDec1')",
+            "FFT: origin_fft(worksheet, x_column, y_column, plot_spectrum=True)",
+            "3D 表面: origin_plot3d({'z': [[..],..]}, plot_type='surface')",
+            "等高线: origin_plot_contour({'z': [[..],..]})",
+            "删异常点: origin_filter_data(worksheet, x_min=.., x_max=..) 再 plot",
+        ],
+        "tips": [
+            "所有工具返回 JSON；ok=false 时读 error/hint 字段",
+            "file_path 省略时输出到 ~/dsch_origin_plugin/output（自动命名）",
+            "数据 1000 点内秒级完成；不要读 README.md，本速查即完整用法",
+        ],
+    }
+
+
 def _list_sheets_impl():
     ok, conn = _connect_impl()
     if not ok:
@@ -1246,6 +1299,11 @@ def connect():
 @_synchronized
 def status():
     return _status_impl()
+
+
+@_synchronized
+def help():
+    return _help_impl()
 
 
 @_synchronized

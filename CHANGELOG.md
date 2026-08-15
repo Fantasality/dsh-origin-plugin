@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.0 (2026-08-16)
+
+快速上手优化（解决"模型每次读文档才敢画图"的问题）：
+
+- 新增 `origin_help` MCP 工具：不连接 Origin、约 1ms 秒回的速查
+  （数据格式 + 16 工具清单 + 10 个常用任务模板 + 注意事项）；
+- 新增 **`origin-plotting` skill**（DSH 原生 skill 机制）：
+  `$DSH_HOME/skills/origin-plotting/SKILL.md`（两个候选根均已写入），
+  模型目录可见、按需加载，加载即得完整用法，无需再读 README；
+- 全部 MCP 工具 description 补充快速用法提示；
+- server instructions 指引模型优先调用 `origin_help`；
+- 回归：mcp-test 17 工具全绿、selftest OK、并发 8/8。
+
 ## 1.0.1 (2026-08-15)
 
 科学分析能力大幅扩展（MCP 工具 8 → 16 个）：
