@@ -4,11 +4,12 @@
 
 - 🤖 对话触发：`「用 Origin 画 y=x² 折线图并导出 PNG」` → 模型自动调用工具 → 图片落盘
 - 🔌 官方 MCP 桥接：通过 DSH 内置的 `@deepseek-ai/dsh-mcp-client` 注册为原生工具 `mcp__origin__*`
-- 🧪 支持 **line / scatter / line_symbol / column** 四种图型、多列数据、批量 Y 序列
+- 🧪 2D 图：**line / scatter / line_symbol / column**，多列数据、批量 Y 序列
+- 🧬 进阶：**删除/裁剪数据点**、**线性/非线性拟合**（拟合曲线上图）、**3D 表面图 / 3D 散点图**
 - 🔒 多会话并发安全：专用 COM 线程 + 单实例语义，实测 8 线程并发 8/8 通过
 - 🛡 不崩溃：所有错误返回结构化 JSON + 中文排查提示
 
-![示例输出图](docs/example.png)
+![示例输出图](docs/example.png)  ![3D 表面示例](docs/example_3d.png)
 
 ```
 DSH 对话（多会话并发）
@@ -93,6 +94,40 @@ powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\dsh_origin_plugin\regist
 | `origin_plot` | 画图（line/scatter/line_symbol/column） | `worksheet`, `plot_type`, `x_column`/`y_columns`, `title` |
 | `origin_export` | 导出 PNG/SVG | `graph`, `fmt`, `file_path`, `width` |
 | `origin_plot_file` | 一键：写数据→画图→导出 | `columns`, `plot_type`, `fmt`, `file_path`, `width` |
+| `origin_filter_data` | 删除/裁剪数据点（按行索引或 x 范围） | `worksheet`, `drop_rows`, `x_min`/`x_max` |
+| `origin_fit` | 线性/非线性拟合，拟合曲线上图 | `worksheet`, `x_column`/`y_column`, `kind`(linear/ExpDec1/Gauss/...), `plot_curve` |
+| `origin_plot3d` | 3D 表面图 / 3D 散点图并导出 | `data`, `plot_type`(surface/scatter), `fmt`, `file_path` |
+
+## 进阶能力
+
+### 删除/裁剪数据点（`origin_filter_data`）
+
+```python
+# 删除第 2/5/9 行（0 起始索引）
+origin_filter_data(worksheet="[Book1]Sheet1", drop_rows=[2, 5, 9])
+# 只保留 x ∈ [0, 15] 的数据（x 列自动裁剪，NaN 填充尾部，图上不显示）
+origin_filter_data(worksheet="[Book1]Sheet1", x_min=0, x_max=15)
+```
+
+### 拟合（`origin_fit`）
+
+- `kind="linear"`：线性拟合，返回 slope / intercept 及误差；
+- `kind="ExpDec1"` / `"Gauss"` / `"Polynomial"` / `"Lorentz"` / `"Sigmoid"` 等：
+  Origin 内置拟合函数名（非线性最小二乘，返回全部参数 + cod/R² 等统计量）；
+- `plot_curve=True`：自动生成「原始散点 + 拟合曲线」图。
+
+实测参数还原精度：线性 slope=2.035（真值 2.0）；ExpDec1 A1=5.08（真值 5.0）、k=0.518（真值 0.5）、cod=0.997。
+
+### 3D 图（`origin_plot3d`）
+
+```python
+# 3D 表面：z 为 2D 网格（自动生成 X/Y 索引网格，或提供 x/y 向量）
+origin_plot3d(data={"z": [[1, 2, 3], [4, 5, 6], [7, 8, 9]]}, plot_type="surface")
+# 3D 散点：x/y/z 三个等长列表
+origin_plot3d(data={"x": [...], "y": [...], "z": [...]}, plot_type="scatter")
+```
+
+表面图走 Origin 原生 `GLparafunc` 模板（matrix Z/X/Y 三对象），散点走 `plotxy plot:=310`。
 
 ## 并发 / 多会话稳定性设计
 
@@ -132,8 +167,11 @@ dsh-origin-plugin/
 :: 8 线程并发稳定性
 .venv\Scripts\python.exe -X utf8 origin_mcp_server.py --concurrency-test
 
-:: MCP 协议级（模拟 DSH 客户端）
+:: MCP 协议级（模拟 DSH 客户端，验证 8 个工具）
 .venv\Scripts\python.exe -X utf8 origin_mcp_server.py --mcp-test
+
+:: 进阶能力（删点/拟合/3D）
+.venv\Scripts\python.exe -X utf8 smoke\advanced_test.py
 
 :: 用 DSH 自带 Node MCP SDK 握手（与 dsh-mcp-client 同款）
 node smoke\mcp_handshake_test.mjs

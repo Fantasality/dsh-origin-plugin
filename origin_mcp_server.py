@@ -121,6 +121,67 @@ def origin_plot_file(columns: dict, plot_type: str = "line", fmt: str = "png",
     )
 
 
+@mcp.tool()
+def origin_filter_data(worksheet: str, drop_rows: list = None,
+                       x_column: str = "", x_min: float = None,
+                       x_max: float = None) -> dict:
+    """删除/裁剪数据点（写回原工作表）。
+
+    Args:
+        worksheet: 工作表引用 "[Book]Sheet"（origin_write_data 返回）。
+        drop_rows: 要删除的行索引列表（0 起始），如 [2, 5, 9]。
+        x_column: X 列名（默认第一列），用于范围裁剪。
+        x_min / x_max: 仅保留 x 在 [x_min, x_max] 内的数据点。
+    Returns:
+        {"ok": true, "worksheet": ..., "kept": N, "dropped": M}
+    """
+    return engine.filter_data(worksheet, drop_rows=drop_rows,
+                              x_column=x_column or 0, x_min=x_min, x_max=x_max)
+
+
+@mcp.tool()
+def origin_fit(worksheet: str, x_column: str = "", y_column: str = "",
+               kind: str = "linear", plot_curve: bool = True,
+               graph: str = "", title: str = "") -> dict:
+    """对工作表数据做曲线拟合，可选把拟合曲线加到图上。
+
+    Args:
+        worksheet: 工作表引用 "[Book]Sheet"。
+        x_column / y_column: X/Y 列名（默认第一列/第二列）。
+        kind: "linear" 线性拟合；或 Origin 内置拟合函数名，如
+              "ExpDec1"(指数衰减) / "Gauss"(高斯) / "Polynomial"(多项式) /
+              "Lorentz" / "Sigmoid" 等。
+        plot_curve: 是否生成拟合曲线图（原始散点 + 拟合线）。
+        graph: 可选，把拟合曲线添加到已有图（短名）；留空则新建图。
+        title: 新图标题。
+    Returns:
+        {"ok": true, "kind": ..., "parameters": {...}, "report": ...,
+         "fit_curves": ..., "graph": 可选}
+    """
+    return engine.fit(worksheet, x_column or 0, y_column or 1, kind=kind,
+                      plot_curve=plot_curve, graph=graph or None, title=title or None)
+
+
+@mcp.tool()
+def origin_plot3d(data: dict, plot_type: str = "surface", fmt: str = "png",
+                  file_path: str = "", width: int = 1200, title: str = "") -> dict:
+    """画 3D 图并导出文件。
+
+    Args:
+        data: surface 需要 {"z": [[...],...]}（2D 网格，可选 x/y 向量）；
+              scatter 需要 {"x": [...], "y": [...], "z": [...]}。
+        plot_type: surface(3D 表面) | scatter(3D 散点)。
+        fmt: png | svg。
+        file_path: 完整输出路径；留空自动命名到 ~/dsch_origin_plugin/output。
+        width: PNG 宽度像素。
+        title: 图标题。
+    Returns:
+        {"ok": true, "graph": ..., "file": "绝对路径", "size": N, "format": ...}
+    """
+    return engine.plot3d(data, plot_type=plot_type, fmt=fmt,
+                         file_path=file_path or None, width=width, title=title or None)
+
+
 # ---------------------------------------------------------------------------
 # 自测入口
 # ---------------------------------------------------------------------------

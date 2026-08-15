@@ -442,6 +442,217 @@ def _plot_file_impl(columns, plot_type="line", fmt="png", file_path=None, width=
 
 
 # ---------------------------------------------------------------------------
+# 进阶能力：删点 / 拟合 / 3D（在 COM 线程内直接调用各 impl，避免嵌套投递）
+# ---------------------------------------------------------------------------
+def _filter_data_impl(worksheet, drop_rows=None, x_column=0, x_min=None, x_max=None):
+    """删除数据点：按行索引删除 + 按 X 列范围裁剪（写回原工作表）。
+
+    返回: {"ok": True, "worksheet": ..., "kept": N, "dropped": M, ...}
+    """
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        wks = op.find_sheet("w", worksheet)
+        if not wks:
+            return {"ok": False, "error": f"工作表不存在: {worksheet}"}
+
+        ncol = wks.obj.Cols
+        cols = [wks.to_list(i) for i in range(ncol)]
+        if not cols or not cols[0]:
+            return {"ok": False, "error": "工作表无数据"}
+        n = len(cols[0])
+        if isinstance(x_column, str):
+            try:
+                x_column = wks._col_index(x_column)
+            except Exception:
+                return {"ok": False, "error": f"X 列不存在: {x_column}"}
+
+        drop_set = set(int(r) for r in (drop_rows or []) if isinstance(r, (int, float)))
+        keep_idx = []
+        for r in range(n):
+            if r in drop_set:
+                continue
+            if x_min is not None and cols[x_column][r] < x_min:
+                continue
+            if x_max is not None and cols[x_column][r] > x_max:
+                continue
+            keep_idx.append(r)
+
+        dropped = n - len(keep_idx)
+        if dropped == 0:
+            return {"ok": True, "worksheet": str(wks), "kept": n, "dropped": 0,
+                    "detail": "没有需要删除的数据点"}
+        # 重写各列：保留行 + NaN 填充尾部（Origin 将 NaN 视为缺失，图上不显示）
+        for i, col in enumerate(cols):
+            newvals = [col[r] for r in keep_idx]
+            newvals += [float("nan")] * dropped
+            wks.from_list(i, newvals)
+        return {
+            "ok": True,
+            "worksheet": str(wks),
+            "kept": len(keep_idx),
+            "dropped": dropped,
+            "detail": f"已删除 {dropped} 个数据点（保留 {len(keep_idx)}），写回 {wks}",
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
+
+
+def _fit_impl(worksheet, x_column, y_column, kind="linear", plot_curve=True,
+              graph=None, title=None):
+    """拟合：linear（线性）或 Origin 内置拟合函数名（如 ExpDec1/Gauss/Polynomial...）。
+
+    返回: {"ok": True, "kind": ..., "parameters": {...}, "report": ..., "fit_curves": ...,
+           "graph": 可选（拟合曲线已上图时）}
+    """
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        wks = op.find_sheet("w", worksheet)
+        if not wks:
+            return {"ok": False, "error": f"工作表不存在: {worksheet}"}
+
+        kind = (kind or "linear").strip()
+        if kind == "linear":
+            lr = op.LinearFit()
+            lr.set_data(wks, x_column, y_column)
+            res = lr.result()
+            try:
+                parameters = {
+                    "slope": res["Parameters"]["Slope"]["Value"],
+                    "slope_error": res["Parameters"]["Slope"].get("Error"),
+                    "intercept": res["Parameters"]["Intercept"]["Value"],
+                    "intercept_error": res["Parameters"]["Intercept"].get("Error"),
+                    "note": "R² 等统计量见报告表（report 字段）",
+                }
+            except Exception:
+                parameters = {"raw": res}
+            rep, curves = lr.report(0)
+            fit_kind = "linear"
+        else:
+            model = op.NLFit(kind)          # kind = Origin 内置函数名
+            model.set_data(wks, x_column, y_column)
+            model.fit()
+            rep, curves = model.report()    # 必须先 report
+            res = model.result()
+            # result() 返回扁平键：参数名直接作 key（如 y0/A/t1），
+            # e_/s_/f_/u_/l_/ub/lb 前缀是误差/固定/边界元数据，跳过
+            parameters = {}
+            for k, v in res.items():
+                if isinstance(v, (int, float)) and not k.startswith(
+                        ("f_", "s_", "u_", "l_", "ub", "lb", "e_", "Data")):
+                    parameters[k] = v
+            fit_kind = kind
+
+        result = {
+            "ok": True,
+            "kind": fit_kind,
+            "parameters": parameters,
+            "report": rep,
+            "fit_curves": curves,
+            "worksheet": str(wks),
+            "detail": f"{fit_kind} 拟合完成，参数见 parameters",
+        }
+
+        # 拟合曲线加图：原始数据（散点）+ 拟合曲线（线）
+        if plot_curve and curves:
+            wc = op.find_sheet("w", curves)
+            if graph:
+                gp = op.find_graph(graph)
+                if not gp:
+                    return {**result, "warning": f"图不存在: {graph}，未添加拟合曲线"}
+            else:
+                gp = op.new_graph(lname=title or f"{fit_kind}_fit")
+            gl = gp[0]
+            gl.add_plot(wks, y_column, x_column, type="s")
+            gl.add_plot(wc, 1, 0, type="l")
+            gl.rescale()
+            gname = gp.obj.GetName()
+            result["graph"] = gname
+            result["detail"] += f"，拟合曲线已上图（{gname}）"
+        return result
+    except Exception as e:
+        return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
+
+
+def _plot3d_impl(data, plot_type="surface", fmt="png", file_path=None, width=1200,
+                 output_dir=None, title=None):
+    """3D 图：surface（矩阵表面）或 scatter（XYZ 散点）。
+
+    surface 的 data: {"z": [[...],...]}（2D 网格，自动生成 X/Y 索引网格）
+                     或 {"x": [...], "y": [...], "z": [[...],...]}（显式网格向量）
+    scatter 的 data: {"x": [...], "y": [...], "z": [...]}
+    返回: {"ok": True, "graph": ..., "file": ..., ...}
+    """
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        import numpy as np
+
+        plot_type = (plot_type or "surface").lower()
+        if plot_type not in ("surface", "scatter"):
+            return {"ok": False, "error": f"plot_type 必须是 surface/scatter，收到 {plot_type!r}"}
+
+        if plot_type == "surface":
+            if not (isinstance(data, dict) and "z" in data):
+                return {"ok": False, "error": "surface 需要 data={'z': 二维网格, 可选 x/y 向量}"}
+            z2d = np.asarray(data["z"], dtype=float)
+            if z2d.ndim != 2:
+                return {"ok": False, "error": "z 必须是二维网格（列表的列表）"}
+            ny, nx = z2d.shape
+            if "x" in data and "y" in data:
+                gx, gy = np.meshgrid(np.asarray(data["x"], dtype=float),
+                                     np.asarray(data["y"], dtype=float))
+            else:
+                gx, gy = np.meshgrid(np.arange(nx, dtype=float),
+                                     np.arange(ny, dtype=float))
+            ms = op.new_sheet("m", "SurfData")
+            ms.from_np(np.array([z2d, gx, gy]))       # Z, X, Y 三个矩阵对象
+            gp = op.new_graph(lname=title or "SurfPlot", template="GLparafunc")
+            gl = gp[0]
+            gl.add_mplot(ms, 0, 1, 2)
+            gl.rescale()
+            gname = gp.obj.GetName()
+        else:  # scatter
+            if not (isinstance(data, dict) and all(k in data for k in ("x", "y", "z"))):
+                return {"ok": False, "error": "scatter 需要 data={'x': [...], 'y': [...], 'z': [...]}"}
+            lens = {len(data[k]) for k in ("x", "y", "z")}
+            if len(lens) != 1:
+                return {"ok": False, "error": "x/y/z 长度必须一致"}
+            wks = op.new_sheet("w", "Scat3D")
+            wks.from_list(0, list(data["x"]), lname="X")
+            wks.from_list(1, list(data["y"]), lname="Y")
+            wks.from_list(2, list(data["z"]), lname="Z")
+            op.po.LT_execute("plotxy iy:=(1,2,3) plot:=310;")   # 310 = 3D scatter
+            gp = op.find_graph()
+            if not gp:
+                return {"ok": False, "error": "3D 散点图创建失败"}
+            gname = gp.obj.GetName()
+
+        r = _export_impl(gname, file_path=file_path, fmt=fmt, width=width,
+                         output_dir=output_dir)
+        if not r.get("ok"):
+            return r
+        return {
+            "ok": True,
+            "graph": gname,
+            "plot_type": plot_type,
+            "file": r["file"],
+            "size": r["size"],
+            "format": r["format"],
+            "detail": f"3D {plot_type} 图 {gname} 已导出 -> {r['file']}",
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
+
+
+# ---------------------------------------------------------------------------
 # 查询
 # ---------------------------------------------------------------------------
 def _status_impl():
@@ -512,6 +723,26 @@ def plot_file(columns, plot_type="line", fmt="png", file_path=None, width=1200,
     return _plot_file_impl(columns, plot_type=plot_type, fmt=fmt, file_path=file_path,
                            width=width, output_dir=output_dir, x_column=x_column,
                            y_columns=y_columns, title=title)
+
+
+@_synchronized
+def filter_data(worksheet, drop_rows=None, x_column=0, x_min=None, x_max=None):
+    return _filter_data_impl(worksheet, drop_rows=drop_rows, x_column=x_column,
+                             x_min=x_min, x_max=x_max)
+
+
+@_synchronized
+def fit(worksheet, x_column, y_column, kind="linear", plot_curve=True,
+        graph=None, title=None):
+    return _fit_impl(worksheet, x_column, y_column, kind=kind, plot_curve=plot_curve,
+                     graph=graph, title=title)
+
+
+@_synchronized
+def plot3d(data, plot_type="surface", fmt="png", file_path=None, width=1200,
+           output_dir=None, title=None):
+    return _plot3d_impl(data, plot_type=plot_type, fmt=fmt, file_path=file_path,
+                        width=width, output_dir=output_dir, title=title)
 
 
 @_synchronized
