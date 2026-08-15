@@ -29,7 +29,7 @@ import origin_engine as engine
 
 mcp = MCPServer(
     name="origin",
-    version="0.1.0",
+    version="1.0.1",
     instructions=(
         "Origin 科学绘图工具（连接本机 Origin 2026b 自动化服务器）。"
         "推荐直接用 origin_plot_file 一次完成 写数据->画图->导出文件；"
@@ -64,20 +64,24 @@ def origin_write_data(columns: dict, worksheet: str = "") -> dict:
 
 @mcp.tool()
 def origin_plot(worksheet: str, plot_type: str = "line",
-                x_column: str = "", y_columns: list = None, title: str = "") -> dict:
+                x_column: str = "", y_columns: list = None, title: str = "",
+                yerr_column: str = "") -> dict:
     """基于工作表数据画图。
 
     Args:
         worksheet: write_data 返回的工作表引用 "[Book]Sheet"。
-        plot_type: line(折线) | scatter(散点) | line_symbol(线+符号) | column(柱状)。
+        plot_type: line(折线) | scatter(散点) | line_symbol(线+符号) | column(柱状)
+                   | histogram(直方图) | box(箱线图) | bar(条形图)。
         x_column: X 列名，默认取第一列。
         y_columns: Y 列名列表，默认取除 X 外全部数值列。
+        yerr_column: 可选，Y 误差棒列（error bar）。
         title: 图标题。
     Returns:
         {"ok": true, "graph": "<图引用>", ...}
     """
     return engine.plot(worksheet, y_columns=y_columns, x_column=x_column or None,
-                       plot_type=plot_type, title=title or None)
+                       plot_type=plot_type, title=title or None,
+                       yerr_column=yerr_column or None)
 
 
 @mcp.tool()
@@ -180,6 +184,145 @@ def origin_plot3d(data: dict, plot_type: str = "surface", fmt: str = "png",
     """
     return engine.plot3d(data, plot_type=plot_type, fmt=fmt,
                          file_path=file_path or None, width=width, title=title or None)
+
+
+@mcp.tool()
+def origin_stats(worksheet: str, columns: list = None) -> dict:
+    """描述性统计：count/mean/std/min/p25/median/p75/max/skew。
+
+    Args:
+        worksheet: 工作表引用 "[Book]Sheet"。
+        columns: 列名列表；留空则统计全部列。
+    Returns:
+        {"ok": true, "stats": {列名: {...}}}
+    """
+    return engine.stats(worksheet, columns=columns)
+
+
+@mcp.tool()
+def origin_transform(worksheet: str, column: str = "", op: str = "smooth",
+                     window: int = 5, method: str = "moving",
+                     new_x: list = None, write_back: bool = True) -> dict:
+    """数据变换（结果写入新列或返回）。
+
+    Args:
+        worksheet: 工作表引用 "[Book]Sheet"。
+        column: 要变换的列名。
+        op: smooth(平滑) | normalize(归一化) | derivative(微分) | interpolate(插值)。
+        window: smooth 窗口大小（奇数）。
+        method: smooth 用 moving(移动平均)/median(中值)；normalize 用
+                minmax/zscore/sum。
+        new_x: interpolate 时的新 x 网格列表。
+        write_back: 是否把结果写为新列。
+    Returns:
+        {"ok": true, "new_column": "列名", "points": N}
+    """
+    return engine.transform(worksheet, column or 0, op=op, window=window,
+                            method=method, new_x=new_x, write_back=write_back)
+
+
+@mcp.tool()
+def origin_integrate(worksheet: str, x_column: str = "", y_column: str = "") -> dict:
+    """数值积分（梯形法），计算曲线下面积 AUC。
+
+    Args:
+        worksheet: 工作表引用 "[Book]Sheet"。
+        x_column / y_column: X/Y 列名（默认第一列/第二列）。
+    Returns:
+        {"ok": true, "auc": 面积, "points": N}
+    """
+    return engine.integrate(worksheet, x_column or 0, y_column or 1)
+
+
+@mcp.tool()
+def origin_fft(worksheet: str, x_column: str = "", y_column: str = "",
+               plot_spectrum: bool = False, file_path: str = "",
+               width: int = 1200, top: int = 5) -> dict:
+    """FFT 频谱分析：返回主频列表，可选画频谱图并导出。
+
+    Args:
+        worksheet: 工作表引用 "[Book]Sheet"（x 需均匀采样）。
+        x_column / y_column: X/Y 列名。
+        plot_spectrum: 是否画幅度谱图并导出。
+        file_path: 频谱图输出路径（留空自动命名）。
+        width: PNG 宽度。
+        top: 返回前 N 个主频（不含直流）。
+    Returns:
+        {"ok": true, "top_frequencies": [...], "nyquist": ..., "file": 可选}
+    """
+    return engine.fft(worksheet, x_column or 0, y_column or 1,
+                      plot_spectrum=plot_spectrum, file_path=file_path or None,
+                      width=width, top=top)
+
+
+@mcp.tool()
+def origin_correlate(worksheet: str, columns: list = None) -> dict:
+    """列间 Pearson 相关矩阵。
+
+    Args:
+        worksheet: 工作表引用 "[Book]Sheet"。
+        columns: 列名列表；留空则全部列。
+    Returns:
+        {"ok": true, "columns": [...], "correlation": [[...]]}
+    """
+    return engine.correlate(worksheet, columns=columns)
+
+
+@mcp.tool()
+def origin_peak_find(worksheet: str, x_column: str = "", y_column: str = "",
+                     min_height: float = None, min_distance: int = 1) -> dict:
+    """峰值检测：局部极大值 + 最小峰高 + 最小间距去重。
+
+    Args:
+        worksheet: 工作表引用 "[Book]Sheet"。
+        x_column / y_column: X/Y 列名。
+        min_height: 最小峰高（低于此值的峰忽略）。
+        min_distance: 相邻峰最小索引间距（默认 1）。
+    Returns:
+        {"ok": true, "peaks": [{"index","x","y"}...], "count": N}
+    """
+    return engine.peak_find(worksheet, x_column or 0, y_column or 1,
+                            min_height=min_height, min_distance=min_distance)
+
+
+@mcp.tool()
+def origin_histogram(worksheet: str, column: str = "", bins: int = 10,
+                     plot: bool = False, file_path: str = "",
+                     width: int = 1200) -> dict:
+    """直方图统计；plot=True 时画柱状图并导出。
+
+    Args:
+        worksheet: 工作表引用 "[Book]Sheet"。
+        column: 要统计的列名。
+        bins: bin 数量。
+        plot: 是否画图并导出。
+        file_path: 输出路径（留空自动命名）。
+    Returns:
+        {"ok": true, "counts": [...], "bin_edges": [...], "file": 可选}
+    """
+    return engine.histogram(worksheet, column or 0, bins=bins, plot=plot,
+                            file_path=file_path or None, width=width)
+
+
+@mcp.tool()
+def origin_plot_contour(data: dict, plot_type: str = "contour", fmt: str = "png",
+                        file_path: str = "", width: int = 1200,
+                        title: str = "") -> dict:
+    """等高线/3D 线框图并导出。
+
+    Args:
+        data: {"z": [[...],...]}（2D 网格，可选 x/y 向量）。
+        plot_type: contour(等高线) | contour_fill(填充等高线) | 3d_wire(3D 线框)。
+        fmt: png | svg。
+        file_path: 完整输出路径；留空自动命名。
+        width: PNG 宽度像素。
+        title: 图标题。
+    Returns:
+        {"ok": true, "graph": ..., "file": "绝对路径", "size": N}
+    """
+    return engine.plot_contour(data, plot_type=plot_type, fmt=fmt,
+                               file_path=file_path or None, width=width,
+                               title=title or None)
 
 
 # ---------------------------------------------------------------------------

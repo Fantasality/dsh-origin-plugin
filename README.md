@@ -91,12 +91,20 @@ powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\dsh_origin_plugin\regist
 |---|---|---|
 | `origin_status` | 连接状态 / Origin 进程数 / 环境 | 无 |
 | `origin_write_data` | 多列数据写入工作表（dict 或二维列表） | `columns`, `worksheet`? |
-| `origin_plot` | 画图（line/scatter/line_symbol/column） | `worksheet`, `plot_type`, `x_column`/`y_columns`, `title` |
+| `origin_plot` | 画图：line/scatter/line_symbol/column/**histogram/box/bar** + 误差棒 | `worksheet`, `plot_type`, `yerr_column`, `title` |
 | `origin_export` | 导出 PNG/SVG | `graph`, `fmt`, `file_path`, `width` |
 | `origin_plot_file` | 一键：写数据→画图→导出 | `columns`, `plot_type`, `fmt`, `file_path`, `width` |
 | `origin_filter_data` | 删除/裁剪数据点（按行索引或 x 范围） | `worksheet`, `drop_rows`, `x_min`/`x_max` |
-| `origin_fit` | 线性/非线性拟合，拟合曲线上图 | `worksheet`, `x_column`/`y_column`, `kind`(linear/ExpDec1/Gauss/...), `plot_curve` |
-| `origin_plot3d` | 3D 表面图 / 3D 散点图并导出 | `data`, `plot_type`(surface/scatter), `fmt`, `file_path` |
+| `origin_fit` | 线性/非线性拟合（Origin 内置函数），拟合曲线上图 | `worksheet`, `kind`(linear/ExpDec1/Gauss/...), `plot_curve` |
+| `origin_plot3d` | 3D 表面图 / 3D 散点图 | `data`, `plot_type`(surface/scatter) |
+| `origin_stats` | 描述统计：count/mean/std/min/p25/median/p75/max/skew | `worksheet`, `columns` |
+| `origin_transform` | 平滑/归一化/微分/插值（写回新列） | `worksheet`, `op`, `method`, `window`, `new_x` |
+| `origin_integrate` | 数值积分 AUC（梯形法） | `worksheet`, `x_column`, `y_column` |
+| `origin_fft` | FFT 频谱：主频提取 + 频谱图 | `worksheet`, `plot_spectrum`, `top` |
+| `origin_correlate` | Pearson 相关矩阵 | `worksheet`, `columns` |
+| `origin_peak_find` | 峰值检测（峰高/间距过滤） | `worksheet`, `min_height`, `min_distance` |
+| `origin_histogram` | 直方图统计（可画图导出） | `worksheet`, `bins`, `plot` |
+| `origin_plot_contour` | 等高线 / 填充等高线 / 3D 线框 | `data`, `plot_type` |
 
 ## 进阶能力
 
@@ -128,6 +136,37 @@ origin_plot3d(data={"x": [...], "y": [...], "z": [...]}, plot_type="scatter")
 ```
 
 表面图走 Origin 原生 `GLparafunc` 模板（matrix Z/X/Y 三对象），散点走 `plotxy plot:=310`。
+
+## 科学分析（`origin_stats` / `origin_transform` / `origin_fft` 等）
+
+| 能力 | 工具 | 说明 |
+|---|---|---|
+| 描述统计 | `origin_stats` | count/mean/std/min/p25/median/p75/max/skew |
+| 平滑 | `origin_transform(op="smooth")` | 移动平均 / 中值滤波，窗口可调 |
+| 归一化 | `origin_transform(op="normalize")` | minmax / zscore / sum |
+| 数值微分 | `origin_transform(op="derivative")` | 基于 x 步长的梯度 |
+| 插值 | `origin_transform(op="interpolate")` | 任意新 x 网格线性插值 |
+| 积分/AUC | `origin_integrate` | 梯形法曲线下面积 |
+| 频谱分析 | `origin_fft` | 幅度谱 + 主频提取 + 频谱图 |
+| 相关性 | `origin_correlate` | Pearson 相关矩阵 |
+| 峰值检测 | `origin_peak_find` | 局部极大值 + 峰高/间距过滤 |
+| 直方图 | `origin_histogram` | bin 频数 + 柱状图 |
+
+实测：FFT 对 2Hz 正弦（256 点、0.05s 采样）主频检出 2.031Hz；AUC 梯形法精度良好；
+峰值检测对高斯峰（σ=0.5）在 x=6.0 处检出多个候选峰（配合 min_height/min_distance 收敛）。
+
+## 画图类型速查（`origin_plot`）
+
+| plot_type | 实现 | 说明 |
+|---|---|---|
+| line / scatter / line_symbol / column | add_plot | 基础 2D |
+| histogram | numpy 分箱 + 柱状图 | 稳定可控 |
+| box | Origin 原生 box 模板 | 箱线图 |
+| bar | plotxy 215 | 条形图 |
+| + `yerr_column` | add_plot colyerr | 误差棒 |
+
+> 排坑记录：LabTalk `plotxy` 的列范围必须用 `[Book]1!B` 短名形式（`(n)` 索引形式对
+> 部分图型静默失败）；box chart 无可靠 plotxy 代码，改用 Origin box 模板。
 
 ## 并发 / 多会话稳定性设计
 

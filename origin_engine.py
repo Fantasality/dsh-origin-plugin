@@ -42,7 +42,7 @@ _ipc_lock = None                  # 可选跨进程锁（Windows 命名互斥体
 _origin_app = None                # 惰性连接的 originpro 句柄（仅 COM 线程访问）
 _connected = False
 
-# 画图类型 -> originpro add_plot type 参数
+# 画图类型 -> originpro add_plot type 参数（2D 基础）
 PLOT_TYPES = {
     "line": "l",          # 折线
     "scatter": "s",       # 散点
@@ -50,8 +50,27 @@ PLOT_TYPES = {
     "column": "c",        # 柱状
 }
 
+# 画图类型 -> LabTalk plotxy plot:= 代码（特殊图型，单列数据）
+# 官方 Plot Type IDs（https://docs.originlab.com/labtalk/ref/plot-type-ids/）：
+# 206=Box, 215=Bar；histogram 走 numpy 分箱方案（不依赖 plotxy）
+PLOT_XY_CODES = {
+    "box": 206,           # 箱线图
+    "bar": 215,           # 条形图
+}
+
+# 等高线/3D matrix 图型 -> add_mplot type
+MATRIX_PLOT_TYPES = {
+    "contour": 104,       # 等高线
+    "contour_fill": 105,  # 填充等高线
+    "3d_wire": 106,       # 3D 线框
+    "3d_surface": 103,    # 3D 表面（GLparafunc）
+}
+
 PLOT_TYPES_CN = {
     "line": "折线", "scatter": "散点", "line_symbol": "线+符号", "column": "柱状",
+    "histogram": "直方图", "box": "箱线图", "bar": "条形图",
+    "contour": "等高线", "contour_fill": "填充等高线", "3d_wire": "3D线框",
+    "3d_surface": "3D表面",
 }
 
 
@@ -313,19 +332,116 @@ def _normalize_columns(columns):
 # 画图
 # ---------------------------------------------------------------------------
 def _plot_impl(worksheet, y_columns=None, x_column=None, plot_type="line",
-               graph_name=None, title=None):
+               graph_name=None, title=None, yerr_column=None):
     try:
         ok, conn = _connect_impl()
         if not ok:
             return conn
         op = _origin_app
 
-        if plot_type not in PLOT_TYPES:
-            return {"ok": False, "error": f"plot_type 必须是 {list(PLOT_TYPES)} 之一，收到 {plot_type!r}"}
+        plot_type = (plot_type or "line").lower()
         wks = op.find_sheet("w", worksheet)
         if not wks:
             return {"ok": False, "error": f"工作表不存在: {worksheet}"}
 
+        # 特殊图型：直方图（numpy 分箱 + 柱状图，不依赖 plotxy，稳定可控）
+        if plot_type == "histogram":
+            import numpy as np
+            col = 0
+            if y_columns:
+                c = y_columns[0]
+                ci2 = _col_index_impl(wks, c)
+                col = ci2 if ci2 is not None else 0
+            v = np.asarray(wks.to_list(col), dtype=float)
+            v = v[np.isfinite(v)]
+            if v.size == 0:
+                return {"ok": False, "error": "直方图数据为空"}
+            bins = 10
+            counts, edges = np.histogram(v, bins=bins)
+            centers = (edges[:-1] + edges[1:]) / 2
+            hs = op.new_sheet("w", "HistData")
+            hs.from_list(0, list(centers), lname="bin_center")
+            hs.from_list(1, list(counts), lname="count")
+            gp = op.new_graph(lname=title or "Histogram")
+            gl = gp[0]
+            gl.add_plot(hs, 1, 0, type="c")
+            gl.rescale()
+            short_name = gp.obj.GetName()
+            return {
+                "ok": True,
+                "graph": short_name,
+                "graph_short": short_name,
+                "plot_type": "histogram",
+                "y_columns": [str(col)],
+                "x_column": "auto",
+                "bins": bins,
+                "detail": f"已创建直方图 {short_name}（{bins} 个 bin，{v.size} 点）",
+            }
+
+        # 特殊图型：箱线图（Origin box 模板，不依赖 plotxy 代码）
+        if plot_type == "box":
+            col = 0
+            if y_columns:
+                c = y_columns[0]
+                ci2 = _col_index_impl(wks, c)
+                col = ci2 if ci2 is not None else 0
+            gp = op.new_graph(lname=title or "Box", template="box")
+            gl = gp[0]
+            p = gl.add_plot(wks, col, "#", type="?")   # '#' = 行号作 X
+            if p is None:
+                return {"ok": False, "error": "箱线图创建失败"}
+            gl.rescale()
+            short_name = gp.obj.GetName()
+            return {
+                "ok": True,
+                "graph": short_name,
+                "graph_short": short_name,
+                "plot_type": "box",
+                "y_columns": [str(col)],
+                "x_column": "auto",
+                "detail": f"已创建箱线图 {short_name}",
+            }
+
+        # 特殊图型：条形图（LabTalk plotxy，单列；plot:=215 = Bar）
+        if plot_type in PLOT_XY_CODES:
+            code = PLOT_XY_CODES[plot_type]
+            col = 0
+            if y_columns:
+                c = y_columns[0]
+                if isinstance(c, int):
+                    col = c
+                else:
+                    ci2 = _col_index_impl(wks, c)
+                    col = ci2 if ci2 is not None else 0
+            rng = wks.lt_range(False)
+            # 列范围必须用 to_col_range（[Book]1!B 短名形式）；
+            # "(2)" 索引形式对 box(215) 等图型无效（静默失败）
+            colrange = wks.to_col_range(col)
+            before = {str(op.po.Pages(i).GetName()) for i in range(op.po.Pages.Count)}
+            op.po.LT_execute(f"plotxy iy:={colrange} plot:={code};")
+            after = {str(op.po.Pages(i).GetName()) for i in range(op.po.Pages.Count)}
+            new_pages = after - before
+            if not new_pages:
+                return {"ok": False, "error": f"{plot_type} 图创建失败（plotxy 无输出）"}
+            gname = sorted(new_pages)[0]
+            gp = op.find_graph(gname)
+            if not gp:
+                return {"ok": False, "error": f"{plot_type} 图创建失败: {gname}"}
+            gl = gp[0]
+            gl.rescale()
+            short_name = gp.obj.GetName()
+            return {
+                "ok": True,
+                "graph": short_name,
+                "graph_short": short_name,
+                "plot_type": plot_type,
+                "y_columns": [str(col)],
+                "x_column": "auto",
+                "detail": f"已创建图 {short_name}（{PLOT_TYPES_CN.get(plot_type, plot_type)}）",
+            }
+
+        if plot_type not in PLOT_TYPES:
+            return {"ok": False, "error": f"plot_type 必须是 {list(PLOT_TYPES) + list(PLOT_XY_CODES)} 之一，收到 {plot_type!r}"}
         if x_column is None:
             x_column = 0  # 默认第一列（列索引），与 write_data 的"第一列自动为 X"一致
         if y_columns is None:
@@ -335,7 +451,8 @@ def _plot_impl(worksheet, y_columns=None, x_column=None, plot_type="line",
         gl = gp[0]
         plotted = []
         for yc in y_columns:
-            p = gl.add_plot(wks, yc, x_column, type=PLOT_TYPES[plot_type])
+            p = gl.add_plot(wks, yc, x_column, type=PLOT_TYPES[plot_type],
+                            colyerr=yerr_column or -1)
             if p is None:
                 return {"ok": False, "error": f"画图失败: y={yc}, x={x_column}（列不存在？）"}
             plotted.append(str(yc))
@@ -348,6 +465,7 @@ def _plot_impl(worksheet, y_columns=None, x_column=None, plot_type="line",
             "plot_type": plot_type,
             "y_columns": plotted,
             "x_column": str(x_column),
+            "yerr_column": str(yerr_column) if yerr_column is not None else None,
             "detail": f"已创建图 {short_name}（{PLOT_TYPES_CN.get(plot_type, plot_type)}，{len(plotted)} 条曲线）",
         }
     except Exception as e:
@@ -653,6 +771,438 @@ def _plot3d_impl(data, plot_type="surface", fmt="png", file_path=None, width=120
 
 
 # ---------------------------------------------------------------------------
+# 科学分析：统计 / 变换 / 积分 / FFT / 相关 / 峰值 / 直方图 / 等高线
+# ---------------------------------------------------------------------------
+def _col_index_impl(wks, col):
+    """列名或索引 -> 0 起始索引；不存在返回 None。"""
+    if isinstance(col, int):
+        return col if 0 <= col < wks.obj.Cols else None
+    try:
+        idx = wks._col_index(col)
+        return idx if idx >= 0 else None
+    except Exception:
+        return None
+
+
+def _write_col_impl(wks, data, lname=None):
+    """把数据写为新列，返回列名。"""
+    ncol = wks.obj.Cols
+    wks.from_list(ncol, list(data), lname=lname or f"C{ncol + 1}")
+    try:
+        return wks.obj[ncol].GetLongName() or wks.obj[ncol].GetName()
+    except Exception:
+        return str(ncol)
+
+
+def _stats_impl(worksheet, columns=None):
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        wks = op.find_sheet("w", worksheet)
+        if not wks:
+            return {"ok": False, "error": f"工作表不存在: {worksheet}"}
+        import numpy as np
+        if columns is None:
+            columns = [wks.obj[i].GetLongName() or wks.obj[i].GetName()
+                       for i in range(wks.obj.Cols)]
+        out = {}
+        for c in columns:
+            ci = _col_index_impl(wks, c)
+            if ci is None or ci >= wks.obj.Cols:
+                return {"ok": False, "error": f"列不存在: {c}"}
+            v = np.asarray(wks.to_list(ci), dtype=float)
+            v = v[np.isfinite(v)]
+            if v.size == 0:
+                out[str(c)] = {"error": "无有效数值"}
+                continue
+            out[str(c)] = {
+                "count": int(v.size),
+                "mean": float(v.mean()),
+                "std": float(v.std(ddof=1)) if v.size > 1 else 0.0,
+                "min": float(v.min()),
+                "p25": float(np.percentile(v, 25)),
+                "median": float(np.median(v)),
+                "p75": float(np.percentile(v, 75)),
+                "max": float(v.max()),
+                "skew": float(__skew_impl(v)) if v.size > 2 else 0.0,
+            }
+        return {"ok": True, "worksheet": str(wks), "stats": out,
+                "detail": "描述统计完成（count/mean/std/min/p25/median/p75/max/skew）"}
+    except Exception as e:
+        return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
+
+
+def __skew_impl(v):
+    import numpy as np
+    m = v.mean()
+    s = v.std(ddof=1)
+    if s == 0:
+        return 0.0
+    return float((((v - m) / s) ** 3).mean())
+
+
+def _transform_impl(worksheet, column, op="smooth", window=5, method="moving",
+                    new_x=None, write_back=True):
+    """数据变换：smooth(移动平均/中值) | normalize(minmax/zscore/sum) | derivative | interpolate。"""
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op_ = _origin_app
+        wks = op_.find_sheet("w", worksheet)
+        if not wks:
+            return {"ok": False, "error": f"工作表不存在: {worksheet}"}
+        import numpy as np
+
+        ci = _col_index_impl(wks, column)
+        if ci is None:
+            return {"ok": False, "error": f"列不存在: {column}"}
+        v = np.asarray(wks.to_list(ci), dtype=float)
+        n = v.size
+        op_name = (op or "smooth").lower()
+
+        if op_name == "smooth":
+            w = max(1, int(window))
+            if w % 2 == 0:
+                w += 1
+            if method == "median":
+                out = np.array([np.median(v[max(0, i - w // 2): i + w // 2 + 1])
+                                for i in range(n)])
+            else:  # moving average
+                kernel = np.ones(w) / w
+                out = np.convolve(v, kernel, mode="same")
+                # 边界修正（convolve same 两端偏差，用可用窗口重算）
+                for i in range(w // 2):
+                    lo, hi = 0, i + w // 2 + 1
+                    out[i] = v[lo:hi].mean()
+                    out[n - 1 - i] = v[n - 1 - hi + 1:].mean()
+        elif op_name == "normalize":
+            method = (method or "minmax").lower()
+            if method == "zscore":
+                s = v.std(ddof=1)
+                out = (v - v.mean()) / s if s else v - v.mean()
+            elif method == "sum":
+                out = v / v.sum() if v.sum() else v
+            else:  # minmax
+                r = v.max() - v.min()
+                out = (v - v.min()) / r if r else v - v.min()
+        elif op_name == "derivative":
+            if ci + 1 < wks.obj.Cols and ci - 1 >= 0:
+                # 有 X 列（通常第 0 列）时用 x 差分
+                xv = np.asarray(wks.to_list(0), dtype=float)
+                out = np.gradient(v, xv)
+            else:
+                out = np.gradient(v)
+        elif op_name == "interpolate":
+            if new_x is None:
+                return {"ok": False, "error": "interpolate 需要 new_x（新 x 网格列表）"}
+            xv = np.asarray(wks.to_list(0), dtype=float)
+            nx = np.asarray(new_x, dtype=float)
+            out = np.interp(nx, xv, v)
+            # 写回时同时写新 x
+            xname = _write_col_impl(wks, nx, lname=f"x_interp")
+            new_col = _write_col_impl(wks, out, lname=f"{_col_name_impl(wks, ci)}_interp")
+            return {"ok": True, "worksheet": str(wks), "new_column": new_col,
+                    "new_x_column": xname, "points": int(nx.size),
+                    "detail": f"插值完成 -> 新列 {new_col}（{nx.size} 点）"}
+        else:
+            return {"ok": False, "error": f"op 必须是 smooth/normalize/derivative/interpolate，收到 {op_name!r}"}
+
+        if write_back:
+            new_col = _write_col_impl(wks, out,
+                                      lname=f"{_col_name_impl(wks, ci)}_{op_name}")
+        else:
+            new_col = None
+        return {"ok": True, "worksheet": str(wks), "new_column": new_col,
+                "points": int(n), "op": op_name,
+                "detail": f"{op_name} 完成" + (f"，结果写入新列 {new_col}" if new_col else "")}
+    except Exception as e:
+        return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
+
+
+def _col_name_impl(wks, ci):
+    try:
+        return wks.obj[ci].GetLongName() or wks.obj[ci].GetName()
+    except Exception:
+        return str(ci)
+
+
+def _integrate_impl(worksheet, x_column=0, y_column=1):
+    """数值积分（梯形法），返回曲线下面积 AUC。"""
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        wks = op.find_sheet("w", worksheet)
+        if not wks:
+            return {"ok": False, "error": f"工作表不存在: {worksheet}"}
+        import numpy as np
+        xi = _col_index_impl(wks, x_column)
+        yi = _col_index_impl(wks, y_column)
+        if xi is None or yi is None:
+            return {"ok": False, "error": "x/y 列不存在"}
+        xv = np.asarray(wks.to_list(xi), dtype=float)
+        yv = np.asarray(wks.to_list(yi), dtype=float)
+        mask = np.isfinite(xv) & np.isfinite(yv)
+        auc = float(np.trapezoid(yv[mask], xv[mask]))
+        return {"ok": True, "worksheet": str(wks), "auc": auc,
+                "x_column": str(x_column), "y_column": str(y_column),
+                "points": int(mask.sum()),
+                "detail": f"曲线下面积 AUC = {auc:.6g}（梯形法，{int(mask.sum())} 点）"}
+    except Exception as e:
+        return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
+
+
+def _fft_impl(worksheet, x_column=0, y_column=1, plot_spectrum=False,
+              file_path=None, fmt="png", width=1200, top=5):
+    """FFT 频谱分析：返回幅度谱与前 top 个主频；可选画频谱图并导出。"""
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        wks = op.find_sheet("w", worksheet)
+        if not wks:
+            return {"ok": False, "error": f"工作表不存在: {worksheet}"}
+        import numpy as np
+        xi = _col_index_impl(wks, x_column)
+        yi = _col_index_impl(wks, y_column)
+        xv = np.asarray(wks.to_list(xi), dtype=float)
+        yv = np.asarray(wks.to_list(yi), dtype=float)
+        n = xv.size
+        if n < 4:
+            return {"ok": False, "error": "数据点太少（至少 4 点）"}
+        dx = float(np.median(np.diff(xv))) if n > 1 else 1.0
+        if dx <= 0:
+            return {"ok": False, "error": "x 必须单调递增（均匀采样）"}
+        yv = yv - yv.mean()
+        spec = np.abs(np.fft.rfft(yv))
+        freqs = np.fft.rfftfreq(n, d=dx)
+        amps = spec / n * 2
+        amps[0] /= 2
+        # 主频（跳过 DC）
+        idx = np.argsort(amps[1:])[::-1][: max(1, int(top))] + 1
+        peaks = [{"frequency": float(freqs[i]), "amplitude": float(amps[i])}
+                 for i in idx]
+        result = {
+            "ok": True,
+            "worksheet": str(wks),
+            "n_points": n,
+            "sampling_interval": dx,
+            "nyquist": float(freqs[-1]),
+            "top_frequencies": peaks,
+            "detail": f"FFT 完成：{n} 点，采样间隔 {dx:.6g}，主频 {peaks[0]['frequency']:.6g}",
+        }
+        if plot_spectrum:
+            ws = op.new_sheet("w", "FFTSpectrum")
+            ws.from_list(0, list(freqs), lname="Frequency")
+            ws.from_list(1, list(amps), lname="Amplitude")
+            gp = op.new_graph(lname="FFT Spectrum")
+            gl = gp[0]
+            gl.add_plot(ws, 1, 0, type="l")
+            gl.rescale()
+            gname = gp.obj.GetName()
+            result["graph"] = gname
+            r = _export_impl(gname, file_path=file_path, fmt=fmt, width=width)
+            if r.get("ok"):
+                result["file"] = r["file"]
+                result["size"] = r["size"]
+                result["format"] = r["format"]
+            else:
+                result["warning"] = f"频谱图导出失败: {r.get('error')}"
+        return result
+    except Exception as e:
+        return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
+
+
+def _correlate_impl(worksheet, columns=None):
+    """Pearson 相关矩阵。"""
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        wks = op.find_sheet("w", worksheet)
+        if not wks:
+            return {"ok": False, "error": f"工作表不存在: {worksheet}"}
+        import numpy as np
+        if columns is None:
+            columns = [wks.obj[i].GetLongName() or wks.obj[i].GetName()
+                       for i in range(wks.obj.Cols)]
+        names = [str(c) for c in columns]
+        mat = []
+        used = []
+        for c in columns:
+            ci = _col_index_impl(wks, c)
+            if ci is None:
+                return {"ok": False, "error": f"列不存在: {c}"}
+            v = np.asarray(wks.to_list(ci), dtype=float)
+            mat.append(v)
+            used.append(str(c))
+        # 长度不一致时按最短列截断（如插值/变换产生短列）
+        minlen = min(len(v) for v in mat)
+        if minlen == 0:
+            return {"ok": False, "error": "存在空列，无法计算相关"}
+        arr = np.vstack([v[:minlen] for v in mat])
+        corr = np.corrcoef(arr)
+        note = ""
+        if any(len(v) != minlen for v in mat):
+            note = f"（列长度不一致，已按最短 {minlen} 行截断计算）"
+        return {
+            "ok": True,
+            "worksheet": str(wks),
+            "columns": used,
+            "correlation": [[float(x) for x in row] for row in corr],
+            "rows_used": int(minlen),
+            "detail": f"Pearson 相关矩阵（{len(used)} 列）{note}",
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
+
+
+def _peak_find_impl(worksheet, x_column=0, y_column=1, min_height=None,
+                    min_distance=1):
+    """峰值检测：局部极大值 + 最小峰高过滤 + 最小间距去重。"""
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        wks = op.find_sheet("w", worksheet)
+        if not wks:
+            return {"ok": False, "error": f"工作表不存在: {worksheet}"}
+        import numpy as np
+        xi = _col_index_impl(wks, x_column)
+        yi = _col_index_impl(wks, y_column)
+        xv = np.asarray(wks.to_list(xi), dtype=float)
+        yv = np.asarray(wks.to_list(yi), dtype=float)
+        n = yv.size
+        cands = [i for i in range(1, n - 1)
+                 if yv[i] >= yv[i - 1] and yv[i] >= yv[i + 1]]
+        if min_height is not None:
+            cands = [i for i in cands if yv[i] >= min_height]
+        # min_distance 去重：间距内保留最高峰
+        cands.sort(key=lambda i: yv[i], reverse=True)
+        picked = []
+        for i in cands:
+            if all(abs(i - j) >= max(1, int(min_distance)) for j in picked):
+                picked.append(i)
+        picked.sort()
+        peaks = [{"index": int(i), "x": float(xv[i]), "y": float(yv[i])}
+                 for i in picked]
+        return {
+            "ok": True,
+            "worksheet": str(wks),
+            "peaks": peaks,
+            "count": len(peaks),
+            "detail": f"检测到 {len(peaks)} 个峰值",
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
+
+
+def _histogram_impl(worksheet, column=0, bins=10, plot=False, file_path=None,
+                    fmt="png", width=1200):
+    """直方图：返回 bin 区间与频数；plot=True 时画柱状图并导出。"""
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        wks = op.find_sheet("w", worksheet)
+        if not wks:
+            return {"ok": False, "error": f"工作表不存在: {worksheet}"}
+        import numpy as np
+        ci = _col_index_impl(wks, column)
+        v = np.asarray(wks.to_list(ci), dtype=float)
+        v = v[np.isfinite(v)]
+        if v.size == 0:
+            return {"ok": False, "error": "无有效数值"}
+        counts, edges = np.histogram(v, bins=int(bins))
+        centers = (edges[:-1] + edges[1:]) / 2
+        result = {
+            "ok": True,
+            "worksheet": str(wks),
+            "column": str(column),
+            "bins": int(bins),
+            "counts": [int(c) for c in counts],
+            "bin_edges": [float(e) for e in edges],
+            "bin_centers": [float(c) for c in centers],
+            "detail": f"直方图统计完成（{int(bins)} 个 bin，{v.size} 点）",
+        }
+        if plot:
+            ws = op.new_sheet("w", "HistData")
+            ws.from_list(0, list(centers), lname="bin_center")
+            ws.from_list(1, list(counts), lname="count")
+            gp = op.new_graph(lname="Histogram")
+            gl = gp[0]
+            gl.add_plot(ws, 1, 0, type="c")
+            gl.rescale()
+            gname = gp.obj.GetName()
+            result["graph"] = gname
+            r = _export_impl(gname, file_path=file_path, fmt=fmt, width=width)
+            if r.get("ok"):
+                result["file"] = r["file"]
+                result["size"] = r["size"]
+                result["format"] = r["format"]
+            else:
+                result["warning"] = f"直方图导出失败: {r.get('error')}"
+        return result
+    except Exception as e:
+        return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
+
+
+def _plot_contour_impl(data, plot_type="contour", fmt="png", file_path=None,
+                       width=1200, output_dir=None, title=None):
+    """等高线图：data={"z": 2D 网格, 可选 x/y}；plot_type: contour|contour_fill|3d_wire。"""
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        import numpy as np
+        plot_type = (plot_type or "contour").lower()
+        if plot_type not in MATRIX_PLOT_TYPES:
+            return {"ok": False, "error": f"plot_type 必须是 {list(MATRIX_PLOT_TYPES)} 之一"}
+        if not (isinstance(data, dict) and "z" in data):
+            return {"ok": False, "error": "需要 data={'z': 二维网格, 可选 x/y 向量}"}
+        z2d = np.asarray(data["z"], dtype=float)
+        if z2d.ndim != 2:
+            return {"ok": False, "error": "z 必须是二维网格"}
+        ny, nx = z2d.shape
+        if "x" in data and "y" in data:
+            gx, gy = np.meshgrid(np.asarray(data["x"], dtype=float),
+                                 np.asarray(data["y"], dtype=float))
+        else:
+            gx, gy = np.meshgrid(np.arange(nx, dtype=float), np.arange(ny, dtype=float))
+        ms = op.new_sheet("m", "ContourData")
+        ms.from_np(np.array([z2d, gx, gy]))
+        gp = op.new_graph(lname=title or "Contour", template="GLparafunc")
+        gl = gp[0]
+        gl.add_mplot(ms, 0, 1, 2, type=MATRIX_PLOT_TYPES[plot_type])
+        gl.rescale()
+        gname = gp.obj.GetName()
+        r = _export_impl(gname, file_path=file_path, fmt=fmt, width=width,
+                         output_dir=output_dir)
+        if not r.get("ok"):
+            return r
+        return {
+            "ok": True,
+            "graph": gname,
+            "plot_type": plot_type,
+            "file": r["file"],
+            "size": r["size"],
+            "format": r["format"],
+            "detail": f"{plot_type} 图 {gname} 已导出 -> {r['file']}",
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
+
+
+# ---------------------------------------------------------------------------
 # 查询
 # ---------------------------------------------------------------------------
 def _status_impl():
@@ -706,9 +1256,10 @@ def write_data(columns, worksheet=None, book_name=None, sheet_name=None):
 
 @_synchronized
 def plot(worksheet, y_columns=None, x_column=None, plot_type="line",
-         graph_name=None, title=None):
+         graph_name=None, title=None, yerr_column=None):
     return _plot_impl(worksheet, y_columns=y_columns, x_column=x_column,
-                      plot_type=plot_type, graph_name=graph_name, title=title)
+                      plot_type=plot_type, graph_name=graph_name, title=title,
+                      yerr_column=yerr_column)
 
 
 @_synchronized
@@ -743,6 +1294,57 @@ def plot3d(data, plot_type="surface", fmt="png", file_path=None, width=1200,
            output_dir=None, title=None):
     return _plot3d_impl(data, plot_type=plot_type, fmt=fmt, file_path=file_path,
                         width=width, output_dir=output_dir, title=title)
+
+
+@_synchronized
+def stats(worksheet, columns=None):
+    return _stats_impl(worksheet, columns=columns)
+
+
+@_synchronized
+def transform(worksheet, column, op="smooth", window=5, method="moving",
+              new_x=None, write_back=True):
+    return _transform_impl(worksheet, column, op=op, window=window, method=method,
+                           new_x=new_x, write_back=write_back)
+
+
+@_synchronized
+def integrate(worksheet, x_column=0, y_column=1):
+    return _integrate_impl(worksheet, x_column=x_column, y_column=y_column)
+
+
+@_synchronized
+def fft(worksheet, x_column=0, y_column=1, plot_spectrum=False,
+        file_path=None, fmt="png", width=1200, top=5):
+    return _fft_impl(worksheet, x_column=x_column, y_column=y_column,
+                     plot_spectrum=plot_spectrum, file_path=file_path, fmt=fmt,
+                     width=width, top=top)
+
+
+@_synchronized
+def correlate(worksheet, columns=None):
+    return _correlate_impl(worksheet, columns=columns)
+
+
+@_synchronized
+def peak_find(worksheet, x_column=0, y_column=1, min_height=None, min_distance=1):
+    return _peak_find_impl(worksheet, x_column=x_column, y_column=y_column,
+                           min_height=min_height, min_distance=min_distance)
+
+
+@_synchronized
+def histogram(worksheet, column=0, bins=10, plot=False, file_path=None,
+              fmt="png", width=1200):
+    return _histogram_impl(worksheet, column=column, bins=bins, plot=plot,
+                           file_path=file_path, fmt=fmt, width=width)
+
+
+@_synchronized
+def plot_contour(data, plot_type="contour", fmt="png", file_path=None, width=1200,
+                 output_dir=None, title=None):
+    return _plot_contour_impl(data, plot_type=plot_type, fmt=fmt,
+                              file_path=file_path, width=width,
+                              output_dir=output_dir, title=title)
 
 
 @_synchronized

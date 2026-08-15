@@ -61,6 +61,26 @@ def main():
     show("错误示例(坏列)", engine.plot("[NoSuchBook]Sheet1"))
     show("错误示例(坏类型)", engine.plot_file({"x": [1, 2]}, plot_type="pie"))
 
+    # 4) 科学分析：统计 / 平滑 / 积分 / FFT / 等高线
+    import math
+    import random
+    random.seed(3)
+    n = 256
+    xs = [i * 0.05 for i in range(n)]
+    ys = [2.0 * math.sin(2 * math.pi * 2.0 * x) + 0.3 * x
+          + random.uniform(-0.3, 0.3) for x in xs]
+    r4 = show("write_data(含噪信号)", engine.write_data({"t": xs, "sig": ys}))
+    if r4.get("ok"):
+        w4 = r4["worksheet"]
+        show("stats", engine.stats(w4, ["sig"]))
+        show("transform smooth", engine.transform(w4, "sig", op="smooth", window=9))
+        show("integrate AUC", engine.integrate(w4, "t", "sig"))
+        show("fft 主频", engine.fft(w4, "t", "sig", top=3))
+        z = [[math.sin(a) * math.cos(b) for a in (i * 0.3 for i in range(-10, 11))]
+             for b in (j * 0.3 for j in range(-10, 11))]
+        show("plot_contour", engine.plot_contour(
+            {"z": z}, file_path=os.path.join(engine.DEFAULT_OUTPUT_DIR, "demo_contour.png")))
+
     print("DEMO OK")
 
 
