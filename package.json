@@ -1,0 +1,39 @@
+{
+  "name": "dsh-origin-plugin",
+  "version": "1.2.0",
+  "description": "Drive Origin scientific plotting from DeepSeek Harness AI chat via MCP - write data, plot line/scatter/column, export PNG/SVG.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Fantasality/dsh-origin-plugin.git"
+  },
+  "files": [
+    "cordis.patch.yml",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "origin_engine.py",
+    "origin_mcp_server.py",
+    "run_origin_server.cmd",
+    "skills"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "dsh-bundle",
+    "deepseek-harness",
+    "mcp",
+    "model-context-protocol",
+    "origin",
+    "originpro",
+    "scientific-plotting",
+    "data-visualization",
+    "cordis"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
