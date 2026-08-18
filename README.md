@@ -53,6 +53,22 @@ python -m venv .venv
 :: 预期结尾: RESULT: OK  files={'comtest.png': ..., 'comtest.svg': ...}
 ```
 
+### 2.1 以 bundle 方式安装（一键 / 插件市场）
+
+本仓库声明了 DSH 标准的 **`dsh.bundle`** 清单（`package.json` → `cordis.patch.yml`），
+因此可从 DSH 插件市场（`dsh-market` / awesome-dsh-plugin）一键收录，也可用命令安装：
+
+```sh
+dsh plugin --profile web add github:Fantasality/dsh-origin-plugin
+```
+
+装好后 `cordis.patch.yml` 会注册一个 `mcp-origin`（`@deepseek-ai/dsh-mcp-client`），
+默认用系统 `python` 启动 `origin_mcp_server.py`。**注意**：首次使用前仍需按上文「2.
+安装」准备好 venv 依赖（本插件是 Windows + Origin 本地进程，无法纯源码免装运行）；
+若依赖装在独立 venv，请在 profile 的 `cordis.patch.yml` 里用同一 id `mcp-origin`
+覆盖 `command`/`args`（后层覆盖先层），或直接运行 `register_to_dsh.ps1` 一键写入
+本机绝对路径。server 连不上时只记日志、不注册工具，不会导致 DSH 崩溃。
+
 ### 3. 注册到 DSH
 
 ```powershell
