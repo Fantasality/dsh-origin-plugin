@@ -1,0 +1,31 @@
+# dsh-origin-plugin — DeepSeek Harness × Origin 绘图（bundle 层）
+#
+# 本层通过 DSH 官方 @deepseek-ai/dsh-mcp-client 把本仓库的 Python MCP
+# server（origin_mcp_server.py，stdio）注册为原生工具：
+#   mcp__origin__origin_plot_file / origin_write_data / origin_plot /
+#   origin_export / origin_status / ...（共 16 个工具）
+#
+# 前置要求（详见 README「快速开始」）：
+#   · Windows + 已安装 Origin（实测 OriginPro 2026b，2018+ 一般均可）
+#   · Python 3.10+，并按 README 创建 venv 安装依赖：
+#       python -m venv "%USERPROFILE%\dsh_origin_plugin\.venv"
+#       "%USERPROFILE%\dsh_origin_plugin\.venv\Scripts\python.exe" -m pip install -r requirements.txt
+#
+# 覆盖说明：
+#   · 默认 command 指向系统 PATH 中的 python；若依赖装在独立 venv，请在
+#     profile 的 cordis.patch.yml 里用同一 id 覆盖 command/args
+#     （层级：bundle patch → profile patch → $DSH_HOME/cordis.patch.yml，
+#     后层覆盖先层）。也可以用仓库的 register_to_dsh.ps1 一键写入本机
+#     venv 的绝对路径（幂等 / UTF-8 安全 / 自动备份）。
+#   · server 连不上时 failOnStartupError 默认 false：只记日志、不注册工具，
+#     不会导致 DSH 崩溃或启动失败。
+
+- insert:
+    - id: mcp-origin
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: origin
+        transport: stdio
+        command: python
+        args: ['-X', 'utf8', 'origin_mcp_server.py']
+        toolCallTimeoutMs: 120000
