@@ -1,5 +1,19 @@
 # Changelog
 
+
+## 1.2.0 (2026-08-18)
+
+DSH 插件市场（awesome-dsh-plugin / dsh-market）收录准备：
+
+- 新增 `package.json`，声明 **`dsh.bundle`**（→ `cordis.patch.yml`），成为标准
+  bundle 插件，可通过 `dsh plugin --profile web add github:Fantasality/dsh-origin-plugin`
+  一键安装/收录；
+- 新增 `cordis.patch.yml`：注册 `mcp-origin`（`@deepseek-ai/dsh-mcp-client`，stdio），
+  server 连不上时静默降级不致命；路径可用 profile 层覆盖；
+- 新增 `requirements.txt`：统一声明 `mcp / originpro / pywin32 / numpy` 依赖；
+- 新增 `run_origin_server.cmd`：venv 自适应启动器（有 `.venv` 用 venv python，
+  否则退回系统 python）；
+- README 补充「以 bundle 方式安装」小节。
 ## 1.1.0 (2026-08-16)
 
 快速上手优化（解决"模型每次读文档才敢画图"的问题）：
