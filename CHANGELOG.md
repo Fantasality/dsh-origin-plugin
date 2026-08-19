@@ -1,7 +1,24 @@
 # Changelog
 
 
-## 2.0.1 (2026-08-19)
+## 2.0.2 (2026-08-19)
+
+插件市场适配：**装上不坏 DSH**，同时修复打包安装后工具永不注册的 bug。
+
+- **修复相对路径 bug**：bundle 默认 `command: python` + 相对 `origin_mcp_server.py`
+  会把 server 路径解析到 DSH 可执行目录（`python: can't open file ...
+  origin_mcp_server.py`），工具永远不注册。现改为 `!!js` 按
+  `<DSH_HOME>/profiles/web/node_modules/dsh-origin-plugin/` 启动时自定位绝对路径
+  （DSH_HOME 缺省回退 `%USERPROFILE%/.dsh`），并显式设置 `cwd` 与
+  `PYTHONIOENCODING=utf8`；
+- **启动安全**：显式 `failOnStartupError: false` —— server 连不上只记日志、
+  不注册工具，绝不让 DSH 启动失败/挂起；
+- **修复 duplicate loader entry id 启动失败**：旧版 `register_to_dsh.ps1` 写入
+  完整 insert，与 bundle 层撞成两条 `mcp-origin` 会让 DSH 直接启动崩溃。
+  脚本改为写 **config-only 覆盖**（同一 id 合并，不再重复）；bundle 层保证只
+  插入一条 `mcp-origin`；README 明确「永不写第二个完整同名条目」；
+- 全部改动不影响 28 个工具与功能（仅 bundle 装配层与注册脚本）。
+
 
 插件市场安装修复（对应"nothing installable: …ship no prebuilt artifacts"报错）：
 

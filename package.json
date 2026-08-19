@@ -1,7 +1,7 @@
 {
   "name": "dsh-origin-plugin",
-  "version": "2.0.1",
-  "description": "Drive Origin scientific plotting from DeepSeek Harness AI chat via MCP - 28 tools, styled multi-series plots, inline image preview, statistics batch (t/ANOVA/PCA/survival), stable error codes.",
+  "version": "2.0.2",
+  "description": "Drive Origin scientific plotting from DeepSeek Harness AI chat via MCP - 28 tools, styled multi-series plots, inline image preview, statistics batch (t/ANOVA/PCA/survival), stable error codes. Market-safe bundle: self-locating server path, fail-open startup.",
   "license": "MIT",
   "type": "module",
   "main": "./index.js",

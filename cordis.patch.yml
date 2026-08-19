@@ -1,9 +1,22 @@
-# dsh-origin-plugin — DeepSeek Harness × Origin 绘图（bundle 层）
+# dsh-origin-plugin — DeepSeek Harness × Origin 绘图（bundle 层，v2.0.2 市场适配版）
 #
-# 本层通过 DSH 官方 @deepseek-ai/dsh-mcp-client 把本仓库的 Python MCP
-# server（origin_mcp_server.py，stdio）注册为原生工具：
+# 通过 DSH 官方 @deepseek-ai/dsh-mcp-client 把本仓库的 Python MCP server
+# （origin_mcp_server.py，stdio）注册为原生工具：
 #   mcp__origin__origin_plot_file / origin_write_data / origin_plot /
-#   origin_export / origin_status / ...（共 16 个工具）
+#   origin_export / origin_status / ...（共 28 个工具）
+#
+# ── v2.0.2 市场适配要点 ──
+# ▸ 路径自定位：server 的绝对路径由 !!js 在启动时按
+#     <DSH_HOME>/profiles/web/node_modules/dsh-origin-plugin/ 计算；
+#   DSH_HOME 缺省回退到 %USERPROFILE%/.dsh。不再依赖进程工作目录，
+#   修复 2.0.1 及更早版本"python: can't open file ... origin_mcp_server.py"
+#   （旧版相对路径会解析到 DSH 可执行目录而非插件目录，导致工具永不注册）。
+# ▸ 启动安全：failOnStartupError: false —— server 连不上只记日志、不注册工具，
+#   绝不让 DSH 启动失败或挂起（插件市场安装适配的核心目标：装上不坏 DSH）。
+# ▸ 单条目防冲突：本层只插入**一个** mcp-origin。切勿在 profile 里再加一条
+#   完整同名条目（例如 2.0.1 版 register_to_dsh.ps1 生成的完整 insert），
+#   否则 DSH 会以 "duplicate loader entry id: mcp-origin" 直接启动失败。
+#   覆盖时请用「config-only 覆盖」（见下）。
 #
 # 前置要求（详见 README「快速开始」）：
 #   · Windows + 已安装 Origin（实测 OriginPro 2026b，2018+ 一般均可）
@@ -11,14 +24,25 @@
 #       python -m venv "%USERPROFILE%\dsh_origin_plugin\.venv"
 #       "%USERPROFILE%\dsh_origin_plugin\.venv\Scripts\python.exe" -m pip install -r requirements.txt
 #
-# 覆盖说明：
-#   · 默认 command 指向系统 PATH 中的 python；若依赖装在独立 venv，请在
-#     profile 的 cordis.patch.yml 里用同一 id 覆盖 command/args
-#     （层级：bundle patch → profile patch → $DSH_HOME/cordis.patch.yml，
-#     后层覆盖先层）。也可以用仓库的 register_to_dsh.ps1 一键写入本机
-#     venv 的绝对路径（幂等 / UTF-8 安全 / 自动备份）。
-#   · server 连不上时 failOnStartupError 默认 false：只记日志、不注册工具，
-#     不会导致 DSH 崩溃或启动失败。
+# 覆盖说明（可选）：
+#   · 默认 command = 系统 PATH 中的 python。若依赖装在独立 venv（推荐），在
+#     profile 的 cordis.patch.yml 里用**同一 id + config-only** 覆盖 command/args。
+#     覆盖会**整体替换** config，因此必须带上 serverName/transport 等完整字段：
+#         - id: mcp-origin
+#           config:
+#             serverName: origin
+#             transport: stdio
+#             command: C:/Users/<你>/dsh_origin_plugin/.venv/Scripts/python.exe
+#             args: [-X, utf8, C:/Users/<你>/dsh_origin_plugin/origin_mcp_server.py]
+#             env:
+#               PYTHONIOENCODING: utf-8
+#             failOnStartupError: false
+#             toolCallTimeoutMs: 120000
+#     （层级：bundle patch → profile patch → $DSH_HOME/cordis.patch.yml，后层覆盖先层。）
+#   · 若你的 DSH profile 不是默认的 web，把上面的 /profiles/web/ 换成你的 profile
+#     名再覆盖（或直接覆盖 args 里的完整路径）。
+#   · 始终使用 config-only 覆盖（不带 name、不带 insert），避免与 bundle 层撞成
+#     两条完整条目导致 duplicate loader entry id 启动失败。
 
 - insert:
     - id: mcp-origin
@@ -27,5 +51,12 @@
         serverName: origin
         transport: stdio
         command: python
-        args: ['-X', 'utf8', 'origin_mcp_server.py']
+        args:
+          - '-X'
+          - utf8
+          - !!js (process.env.DSH_HOME || (String(process.env.USERPROFILE) + '/.dsh')) + '/profiles/web/node_modules/dsh-origin-plugin/origin_mcp_server.py'
+        cwd: !!js (process.env.DSH_HOME || (String(process.env.USERPROFILE) + '/.dsh')) + '/profiles/web/node_modules/dsh-origin-plugin'
+        env:
+          PYTHONIOENCODING: utf-8
+        failOnStartupError: false
         toolCallTimeoutMs: 120000

@@ -75,12 +75,38 @@ dsh plugin --profile web add github:Fantasality/dsh-origin-plugin
 dsh plugin add dsh-origin-plugin
 ```
 
-装好后 `cordis.patch.yml` 会注册一个 `mcp-origin`（`@deepseek-ai/dsh-mcp-client`），
-默认用系统 `python` 启动 `origin_mcp_server.py`。**注意**：首次使用前仍需按上文「2.
-安装」准备好 venv 依赖（本插件是 Windows + Origin 本地进程，无法纯源码免装运行）；
-若依赖装在独立 venv，请在 profile 的 `cordis.patch.yml` 里用同一 id `mcp-origin`
-覆盖 `command`/`args`（后层覆盖先层），或直接运行 `register_to_dsh.ps1` 一键写入
-本机绝对路径。server 连不上时只记日志、不注册工具，不会导致 DSH 崩溃。
+装好后 `cordis.patch.yml` 会注册一个 `mcp-origin`（`@deepseek-ai/dsh-mcp-client`）。
+**v2.0.2 起 bundle 默认已自定位**：server 绝对路径由 `!!js` 在启动时按
+`<DSH_HOME>/profiles/web/node_modules/dsh-origin-plugin/` 计算（DSH_HOME 缺省回退
+`%USERPROFILE%/.dsh`），不再受进程工作目录影响；默认用系统 `python` 启动
+`origin_mcp_server.py`。
+
+> 📌 **安装此插件不会破坏 DSH 启动**：`failOnStartupError: false` —— server
+> 连不上只记日志、不注册工具，DSH 正常启动。这是插件市场适配的核心约束，已内置。
+> 唯一硬性红线：**不要在 profile 里再写第二条完整 `insert` 的 `mcp-origin`**（会触发
+> `duplicate loader entry id: mcp-origin` 启动失败）；要用 venv，请用下面的
+> config-only 覆盖。
+
+**首次使用前仍需按上文「2. 安装」准备好 venv 依赖**（本插件是 Windows + Origin 本地
+进程，无法纯源码免装运行）。若依赖装在独立 venv，在 profile 的 `cordis.patch.yml` 里
+用**同一 id + config-only** 覆盖（覆盖是**整体替换** config，必须带全字段）：
+
+```yaml
+- id: mcp-origin
+  config:
+    serverName: origin
+    transport: stdio
+    command: 'C:/Users/<你>/dsh_origin_plugin/.venv/Scripts/python.exe'
+    args: ['-X', 'utf8', 'C:/Users/<你>/dsh_origin_plugin/origin_mcp_server.py']
+    env:
+      PYTHONIOENCODING: utf-8
+    failOnStartupError: false
+    toolCallTimeoutMs: 120000
+```
+
+（层级：bundle patch → profile patch → `$DSH_HOME/cordis.patch.yml`，后层覆盖先层。
+若你的 DSH profile 不是默认的 `web`，把自定位路径里的 `/profiles/web/` 换成你的
+profile 名再覆盖。）
 
 ### 3. 注册到 DSH
 
@@ -88,20 +114,27 @@ dsh plugin add dsh-origin-plugin
 powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\dsh_origin_plugin\register_to_dsh.ps1"
 ```
 
-脚本会把以下条目追加到 `%APPDATA%\dsh-desktop\harness\profiles\web\cordis.patch.yml`
+脚本会把以下 **config-only 覆盖**（注意：没有 `name`、没有 `insert`，只替换配置，
+与 bundle 层 `mcp-origin` 合并、不产生重复条目；覆盖会整体替换 config，故带全字段）
+追加到 `%APPDATA%\dsh-desktop\harness\profiles\web\cordis.patch.yml`
 （自动备份、UTF-8 安全、幂等）：
 
 ```yaml
-- insert:
-    - id: mcp-origin
-      name: '@deepseek-ai/dsh-mcp-client'
-      config:
-        serverName: origin
-        transport: stdio
-        command: 'C:/Users/<你>/dsh_origin_plugin/.venv/Scripts/python.exe'
-        args: ['-X', 'utf8', 'C:/Users/<你>/dsh_origin_plugin/origin_mcp_server.py']
-        toolCallTimeoutMs: 120000
+- id: mcp-origin
+  config:
+    serverName: origin
+    transport: stdio
+    command: 'C:/Users/<你>/dsh_origin_plugin/.venv/Scripts/python.exe'
+    args: ['-X', 'utf8', 'C:/Users/<你>/dsh_origin_plugin/origin_mcp_server.py']
+    env:
+      PYTHONIOENCODING: utf-8
+    failOnStartupError: false
+    toolCallTimeoutMs: 120000
 ```
+
+> ⚠️ 旧版脚本写入的是「完整 insert」，与 bundle 层组合会生成两条 `mcp-origin`
+> → DSH 启动直接报 `duplicate loader entry id: mcp-origin`。v2.0.2 的脚本已改为
+> config-only 覆盖；如果你手工写过旧格式，请删掉那条完整 insert，只保留上面的覆盖。
 
 然后 **重启 Harness**（DSH Desktop 菜单 Harness → Restart Harness，或 `Ctrl+Shift+R`）。
 可选校验：`dsh --profile web --dump-config` 能看到 `mcp-origin` 条目。
