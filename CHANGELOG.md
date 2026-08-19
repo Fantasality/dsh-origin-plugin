@@ -1,6 +1,27 @@
 # Changelog
 
 
+## 2.0.3 (2026-08-19)
+
+**发布事故修复**：2.0.2 的修复提交（commit `b488b76`）当时**没有推送到 GitHub**，
+远端 tag `v2.0.1` / `v2.0.2` 都指向了修复前的旧提交 `5eb94d4`，导致用户重新克隆/
+重装拿到的仍是崩溃旧码。2.0.3 = 2.0.2 的全部修复 + 依赖补齐，**本次已真正推送**。
+
+- **新增运行时依赖 `@deepseek-ai/dsh-mcp-client@0.1.0-rc.7`**：bundle 的
+  `cordis.patch.yml` 通过 `name: '@deepseek-ai/dsh-mcp-client'` 注册工具，而该包
+  此前**不在任何依赖里**，市场安装后 profile 的 node_modules 里没有它 →
+  loader 无法按 name 解析该条目 → **工具静默永不注册**（DSH 照常启动、无报错）。
+  现在市场 `pnpm add dsh-origin-plugin` 会把它作为传递依赖装进 profile，
+  `mcp-origin` 条目才能真正激活；（对照证据：profile 里 node_modules 存在该包的
+  dsh-mini/openclaw-bridge 均正常激活，缺失的仅本条目被跳过）
+- 其余（均已在 2.0.2 完成并保留）：`!!js` 自定位 server 绝对路径 + 显式 `cwd` /
+  `PYTHONIOENCODING`；显式 `failOnStartupError: false` 启动安全；
+  `register_to_dsh.ps1` 改 config-only 覆盖、不再产生 duplicate loader entry id。
+- 桌面侧日志复盘（2026-08-19 12:46 第二次崩溃）：崩溃重装与 10:39 为同一签名，
+  均源于装回**旧码**（相对路径 + 旧注册脚本完整 insert）。新码装上后请确认
+  node_modules/show 该依赖已注入。
+
+
 ## 2.0.2 (2026-08-19)
 
 插件市场适配：**装上不坏 DSH**，同时修复打包安装后工具永不注册的 bug。
