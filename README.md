@@ -76,6 +76,9 @@ dsh plugin add dsh-origin-plugin
 ```
 
 装好后 `cordis.patch.yml` 会注册一个 `mcp-origin`（`@deepseek-ai/dsh-mcp-client`）。
+**v2.0.3 起自动携带运行时依赖 `@deepseek-ai/dsh-mcp-client`**：市场安装
+（`dsh plugin add`）会把它作为传递依赖装进 profile 的 node_modules——缺少它时 loader
+无法按 `name` 解析该条目，工具会**静默永不注册**（DSH 照常启动、无任何报错）。
 **v2.0.2 起 bundle 默认已自定位**：server 绝对路径由 `!!js` 在启动时按
 `<DSH_HOME>/profiles/web/node_modules/dsh-origin-plugin/` 计算（DSH_HOME 缺省回退
 `%USERPROFILE%/.dsh`），不再受进程工作目录影响；默认用系统 `python` 启动
