@@ -13,10 +13,14 @@
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
+    "requirements.txt",
     "origin_engine.py",
     "origin_mcp_server.py",
+    "demo_call.py",
     "run_origin_server.cmd",
-    "skills"
+    "skills",
+    "docs",
+    "smoke"
   ],
   "keywords": [
     "dsh",

@@ -59,7 +59,10 @@ python -m venv .venv
 因此可从 DSH 插件市场（`dsh-market` / awesome-dsh-plugin）一键收录，也可用命令安装：
 
 ```sh
+# 方式一：从 GitHub 源码安装
 dsh plugin --profile web add github:Fantasality/dsh-origin-plugin
+# 方式二：从 npm 安装（预构建分发，跳过 building 授权）
+dsh plugin add dsh-origin-plugin
 ```
 
 装好后 `cordis.patch.yml` 会注册一个 `mcp-origin`（`@deepseek-ai/dsh-mcp-client`），
