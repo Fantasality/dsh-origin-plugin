@@ -1,9 +1,12 @@
 {
   "name": "dsh-origin-plugin",
-  "version": "1.2.0",
-  "description": "Drive Origin scientific plotting from DeepSeek Harness AI chat via MCP - write data, plot line/scatter/column, export PNG/SVG.",
+  "version": "2.0.0",
+  "description": "Drive Origin scientific plotting from DeepSeek Harness AI chat via MCP - 28 tools, styled multi-series plots, inline image preview, statistics batch (t/ANOVA/PCA/survival), stable error codes.",
   "license": "MIT",
   "type": "module",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Fantasality/dsh-origin-plugin.git"

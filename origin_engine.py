@@ -31,6 +31,10 @@ import time
 import traceback
 import uuid
 
+import origin_errors as oerr
+import origin_analysis as oana
+import plot_style as pst
+
 # ---------------------------------------------------------------------------
 # 常量与全局
 # ---------------------------------------------------------------------------
@@ -50,13 +54,9 @@ PLOT_TYPES = {
     "column": "c",        # 柱状
 }
 
-# 画图类型 -> LabTalk plotxy plot:= 代码（特殊图型，单列数据）
-# 官方 Plot Type IDs（https://docs.originlab.com/labtalk/ref/plot-type-ids/）：
-# 206=Box, 215=Bar；histogram 走 numpy 分箱方案（不依赖 plotxy）
-PLOT_XY_CODES = {
-    "box": 206,           # 箱线图
-    "bar": 215,           # 条形图
-}
+# 说明：box/bar 均改走 Origin 官方模板（"box"/"bar"），不再依赖 plotxy 代码
+# （plotxy 的 204/215 在部分 Origin 2026b 会渲染成面积图或不出图，真机验证）。
+PLOT_XY_CODES = {}
 
 # 等高线/3D matrix 图型 -> add_mplot type
 MATRIX_PLOT_TYPES = {
@@ -164,10 +164,17 @@ class _WindowsNamedMutex:
 
 
 def _synchronized(fn):
-    """装饰器：公开函数 -> 投递到专用 COM 线程串行执行。"""
+    """装饰器：公开函数 -> 投递到专用 COM 线程串行执行。
+
+    边界兜底：若 impl 返回旧式 {"ok": false, ...}，升级为统一错误码结构
+    （error_code / recoverable / next_actions），保证 MCP 面格式始终一致。
+    """
     def wrapper(*args, **kwargs):
         _configure_ipc_lock_if_requested()
-        return _run_on_com_thread(fn, *args, **kwargs)
+        result = _run_on_com_thread(fn, *args, **kwargs)
+        if isinstance(result, dict) and not result.get("ok") and "error_code" not in result:
+            return oerr.upgrade_legacy_failure(result)
+        return result
     return wrapper
 
 
@@ -266,6 +273,60 @@ def _new_unique_name(prefix):
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
 
 
+def _page_names():
+    """当前项目所有页面短名集合（用于 plotxy 页面差集检测）。"""
+    op = _origin_app
+    try:
+        return {str(op.po.Pages(i).GetName()) for i in range(op.po.Pages.Count)}
+    except Exception:
+        return set()
+
+
+def _plotxy_new_page(script, before):
+    """执行 LabTalk plotxy，用页面名差集返回新建的图页短名。
+
+    不依赖 find_graph()（其返回最近图页有歧义），因此更健壮：
+    优先选非 Book 的图页，避免把数据工作簿当成图。
+    """
+    op = _origin_app
+    op.po.LT_execute(script)
+    after = _page_names()
+    newp = after - before
+    if not newp:
+        return None
+    cands = [n for n in newp if not n.lower().startswith("book")]
+    return (cands or sorted(newp))[0]
+
+
+def _delete_graph_page(graph_name):
+    """按短名删除图页（幂等命名用）。返回是否已删除。"""
+    op = _origin_app
+    try:
+        gp = op.find_graph(graph_name)
+        if gp is not None:
+            gp.destroy()
+            return True
+    except Exception:
+        pass
+    # 兜底：LabTalk 直接删页
+    try:
+        op.po.LT_execute(f"page -d {graph_name};")
+        return True
+    except Exception:
+        return False
+
+
+def _ensure_graph_name(graph_name, title):
+    """幂等命名：若已有同名图页，先删旧再新建，图名保持稳定，不产生 Graph2/3。
+
+    返回用于 new_graph 的 lname。
+    """
+    if graph_name:
+        _delete_graph_page(graph_name)
+        return str(graph_name)
+    return title or ""
+
+
 def _write_data_impl(columns, worksheet=None, book_name=None, sheet_name=None):
     try:
         ok, conn = _connect_impl()
@@ -332,7 +393,9 @@ def _normalize_columns(columns):
 # 画图
 # ---------------------------------------------------------------------------
 def _plot_impl(worksheet, y_columns=None, x_column=None, plot_type="line",
-               graph_name=None, title=None, yerr_column=None):
+               graph_name=None, title=None, yerr_column=None,
+               style_mode=None, family=None):
+    """画图（支持幂等命名 + 可选样式应用）。返回包含 style 建议。"""
     try:
         ok, conn = _connect_impl()
         if not ok:
@@ -342,7 +405,16 @@ def _plot_impl(worksheet, y_columns=None, x_column=None, plot_type="line",
         plot_type = (plot_type or "line").lower()
         wks = op.find_sheet("w", worksheet)
         if not wks:
-            return {"ok": False, "error": f"工作表不存在: {worksheet}"}
+            return oerr.fail("worksheet_not_found", f"工作表不存在: {worksheet}", worksheet=worksheet)
+
+        valid_kinds = list(PLOT_TYPES) + ["histogram", "box", "bar"]
+        if plot_type not in valid_kinds:
+            return oerr.fail("invalid_request",
+                             f"plot_type 必须是 {valid_kinds} 之一，收到 {plot_type!r}",
+                             valid_kinds=valid_kinds, received=plot_type)
+
+        # 幂等命名：同名图页先删旧再新建
+        lname = _ensure_graph_name(graph_name, title or "")
 
         # 特殊图型：直方图（numpy 分箱 + 柱状图，不依赖 plotxy，稳定可控）
         if plot_type == "histogram":
@@ -355,18 +427,21 @@ def _plot_impl(worksheet, y_columns=None, x_column=None, plot_type="line",
             v = np.asarray(wks.to_list(col), dtype=float)
             v = v[np.isfinite(v)]
             if v.size == 0:
-                return {"ok": False, "error": "直方图数据为空"}
+                return oerr.fail("empty_data", "直方图数据为空", column=str(col))
             bins = 10
             counts, edges = np.histogram(v, bins=bins)
             centers = (edges[:-1] + edges[1:]) / 2
             hs = op.new_sheet("w", "HistData")
             hs.from_list(0, list(centers), lname="bin_center")
             hs.from_list(1, list(counts), lname="count")
-            gp = op.new_graph(lname=title or "Histogram")
+            gp = op.new_graph(lname=lname or "Histogram")
             gl = gp[0]
             gl.add_plot(hs, 1, 0, type="c")
             gl.rescale()
             short_name = gp.obj.GetName()
+            style = _apply_style_impl(short_name, plot_type="histogram",
+                                      columns=["count"], style_mode=style_mode,
+                                      family=family, x_title="Bin center")
             return {
                 "ok": True,
                 "graph": short_name,
@@ -375,59 +450,28 @@ def _plot_impl(worksheet, y_columns=None, x_column=None, plot_type="line",
                 "y_columns": [str(col)],
                 "x_column": "auto",
                 "bins": bins,
+                "style": style,
                 "detail": f"已创建直方图 {short_name}（{bins} 个 bin，{v.size} 点）",
             }
 
-        # 特殊图型：箱线图（Origin box 模板，不依赖 plotxy 代码）
-        if plot_type == "box":
-            col = 0
+        # 特殊图型：箱线图 / 条形图（Origin 官方模板，比 plotxy 代码稳定可靠；
+        # plotxy 的 204/215 在部分 Origin 2026b 上会渲染成面积图或不出图）
+        if plot_type in ("box", "bar"):
+            is_bar = plot_type == "bar"
+            ncols = wks.obj.Cols
             if y_columns:
                 c = y_columns[0]
                 ci2 = _col_index_impl(wks, c)
-                col = ci2 if ci2 is not None else 0
-            gp = op.new_graph(lname=title or "Box", template="box")
+                col = ci2 if ci2 is not None else (1 if ncols > 1 else 0)
+            else:
+                col = 1 if ncols > 1 else 0   # 默认取第二列（首列为 X 的惯例）
+            templ = "bar" if is_bar else "box"
+            gp = op.new_graph(lname=lname or ("Bar" if is_bar else "Box"),
+                              template=templ)
             gl = gp[0]
-            p = gl.add_plot(wks, col, "#", type="?")   # '#' = 行号作 X
+            p = gl.add_plot(wks, col, "#", type="?")   # '#' = 行号/类别作 X
             if p is None:
-                return {"ok": False, "error": "箱线图创建失败"}
-            gl.rescale()
-            short_name = gp.obj.GetName()
-            return {
-                "ok": True,
-                "graph": short_name,
-                "graph_short": short_name,
-                "plot_type": "box",
-                "y_columns": [str(col)],
-                "x_column": "auto",
-                "detail": f"已创建箱线图 {short_name}",
-            }
-
-        # 特殊图型：条形图（LabTalk plotxy，单列；plot:=215 = Bar）
-        if plot_type in PLOT_XY_CODES:
-            code = PLOT_XY_CODES[plot_type]
-            col = 0
-            if y_columns:
-                c = y_columns[0]
-                if isinstance(c, int):
-                    col = c
-                else:
-                    ci2 = _col_index_impl(wks, c)
-                    col = ci2 if ci2 is not None else 0
-            rng = wks.lt_range(False)
-            # 列范围必须用 to_col_range（[Book]1!B 短名形式）；
-            # "(2)" 索引形式对 box(215) 等图型无效（静默失败）
-            colrange = wks.to_col_range(col)
-            before = {str(op.po.Pages(i).GetName()) for i in range(op.po.Pages.Count)}
-            op.po.LT_execute(f"plotxy iy:={colrange} plot:={code};")
-            after = {str(op.po.Pages(i).GetName()) for i in range(op.po.Pages.Count)}
-            new_pages = after - before
-            if not new_pages:
-                return {"ok": False, "error": f"{plot_type} 图创建失败（plotxy 无输出）"}
-            gname = sorted(new_pages)[0]
-            gp = op.find_graph(gname)
-            if not gp:
-                return {"ok": False, "error": f"{plot_type} 图创建失败: {gname}"}
-            gl = gp[0]
+                return oerr.fail("origin_operation_error", f"{plot_type} 图创建失败")
             gl.rescale()
             short_name = gp.obj.GetName()
             return {
@@ -440,24 +484,39 @@ def _plot_impl(worksheet, y_columns=None, x_column=None, plot_type="line",
                 "detail": f"已创建图 {short_name}（{PLOT_TYPES_CN.get(plot_type, plot_type)}）",
             }
 
-        if plot_type not in PLOT_TYPES:
-            return {"ok": False, "error": f"plot_type 必须是 {list(PLOT_TYPES) + list(PLOT_XY_CODES)} 之一，收到 {plot_type!r}"}
+        # 主路径：XY 基础图型（line/scatter/line_symbol/column）
         if x_column is None:
             x_column = 0  # 默认第一列（列索引），与 write_data 的"第一列自动为 X"一致
         if y_columns is None:
             y_columns = _y_columns_impl(wks, x_column)
 
-        gp = op.new_graph(lname=title or "")   # 短名自动分配（Graph1, Graph2...）
+        gp = op.new_graph(lname=lname)   # 短名=给定名或自动分配
         gl = gp[0]
         plotted = []
         for yc in y_columns:
             p = gl.add_plot(wks, yc, x_column, type=PLOT_TYPES[plot_type],
                             colyerr=yerr_column or -1)
             if p is None:
-                return {"ok": False, "error": f"画图失败: y={yc}, x={x_column}（列不存在？）"}
+                return oerr.fail("column_not_found", f"画图失败: y={yc}, x={x_column}",
+                                 y_column=str(yc), x_column=str(x_column))
             plotted.append(str(yc))
         gl.rescale()
         short_name = gp.obj.GetName()
+        x_title = None
+        try:
+            # 解析真实 X 列名（x_column 可能是 0 起始索引），再语义推断标题
+            x_name = x_column if not isinstance(x_column, int) else None
+            if x_name is None and x_column is not None:
+                x_name = _col_name_impl(wks, int(x_column))
+            if x_name:
+                t = pst.infer_axis_title([str(x_name)])["title"]
+                if t and str(t).strip() and not str(t).strip().isdigit():
+                    x_title = t
+        except Exception:
+            pass
+        style = _apply_style_impl(short_name, plot_type=plot_type,
+                                  columns=plotted, style_mode=style_mode,
+                                  family=family, x_title=x_title)
         return {
             "ok": True,
             "graph": short_name,
@@ -466,10 +525,11 @@ def _plot_impl(worksheet, y_columns=None, x_column=None, plot_type="line",
             "y_columns": plotted,
             "x_column": str(x_column),
             "yerr_column": str(yerr_column) if yerr_column is not None else None,
+            "style": style,
             "detail": f"已创建图 {short_name}（{PLOT_TYPES_CN.get(plot_type, plot_type)}，{len(plotted)} 条曲线）",
         }
     except Exception as e:
-        return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
 
 
 def _y_columns_impl(wks, x_column):
@@ -544,19 +604,26 @@ def _export_impl(graph, file_path=None, fmt="png", width=1200, output_dir=None):
 # 一站式：写数 + 画图 + 导出（在 COM 线程内直接调用各 impl，避免嵌套投递）
 # ---------------------------------------------------------------------------
 def _plot_file_impl(columns, plot_type="line", fmt="png", file_path=None, width=1200,
-                    output_dir=None, x_column=None, y_columns=None, title=None):
+                    output_dir=None, x_column=None, y_columns=None, title=None,
+                    graph_name=None, style_mode=None, family=None):
     try:
         r1 = _write_data_impl(columns)
         if not r1.get("ok"):
             return r1
         r2 = _plot_impl(r1["worksheet"], y_columns=y_columns, x_column=x_column,
-                        plot_type=plot_type, title=title)
+                        plot_type=plot_type, title=title, graph_name=graph_name,
+                        style_mode=style_mode, family=family)
         if not r2.get("ok"):
             return r2
-        return _export_impl(r2["graph"], file_path=file_path, fmt=fmt, width=width,
-                            output_dir=output_dir)
+        result = _export_impl(r2["graph"], file_path=file_path, fmt=fmt, width=width,
+                              output_dir=output_dir)
+        if result.get("ok"):
+            result["graph"] = r2.get("graph")
+            result["plot_type"] = r2.get("plot_type")
+            result["style"] = r2.get("style")
+        return result
     except Exception as e:
-        return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
 
 
 # ---------------------------------------------------------------------------
@@ -743,14 +810,21 @@ def _plot3d_impl(data, plot_type="surface", fmt="png", file_path=None, width=120
             lens = {len(data[k]) for k in ("x", "y", "z")}
             if len(lens) != 1:
                 return {"ok": False, "error": "x/y/z 长度必须一致"}
-            wks = op.new_sheet("w", "Scat3D")
+            wks = op.new_sheet("w", _new_unique_name("Scat3D"))
             wks.from_list(0, list(data["x"]), lname="X")
             wks.from_list(1, list(data["y"]), lname="Y")
             wks.from_list(2, list(data["z"]), lname="Z")
-            op.po.LT_execute("plotxy iy:=(1,2,3) plot:=310;")   # 310 = 3D scatter
-            gp = op.find_graph()
+            wks.activate()
+            before = _page_names()
+            gname = _plotxy_new_page("plotxy iy:=(1,2,3) plot:=310;", before)
+            if not gname:
+                return oerr.fail(
+                    "unsupported_origin_feature",
+                    "3D 散点图创建失败（plotxy 310 在当前 Origin 上无输出，可改用 origin_plot3d 的 surface）")
+            gp = op.find_graph(gname)
             if not gp:
-                return {"ok": False, "error": "3D 散点图创建失败"}
+                return oerr.fail("origin_operation_error", f"3D 散点图创建失败: {gname}",
+                                 gname=gname)
             gname = gp.obj.GetName()
 
         r = _export_impl(gname, file_path=file_path, fmt=fmt, width=width,
@@ -1246,6 +1320,16 @@ def _help_impl():
             "origin_peak_find": "峰值检测（min_height/min_distance）",
             "origin_histogram": "直方图统计（plot=True 画图导出）",
             "origin_plot_contour": "等高线 contour/contour_fill/3d_wire（需 {'z': 2D网格}）",
+            "origin_catalog": "动态工具目录（按分类列出全部工具）",
+            "origin_read_worksheet": "读取工作表列数据（含列角色/点数）",
+            "origin_view_graph": "把图渲染为内联图片，模型可直接看（不落盘）",
+            "origin_apply_style": "对已有图应用排版/调色板/多序列区分（style_mode/family）",
+            "origin_ttest": "t 检验：one/两样本(Welch)/paired",
+            "origin_anova": "单因素方差分析（每组一列）",
+            "origin_pca": "主成分分析（载荷/解释方差/得分）",
+            "origin_survival": "Kaplan-Meier 生存分析（时间列+事件列）",
+            "origin_list_graphs": "列出项目图页短名",
+            "origin_error_codes": "列出全部稳定错误码与恢复建议",
         },
         "templates": [
             "折线图: origin_plot_file(columns, plot_type='line')",
@@ -1260,7 +1344,10 @@ def _help_impl():
             "删异常点: origin_filter_data(worksheet, x_min=.., x_max=..) 再 plot",
         ],
         "tips": [
-            "所有工具返回 JSON；ok=false 时读 error/hint 字段",
+            "所有工具返回 JSON；ok=false 时读 error_code / recoverable / next_actions 安全分支重试",
+            "画图可用 style_mode=default|journal|presentation 与 family=调色板家族 提升排版",
+            "需视觉校验时调用 origin_view_graph（返回内联图片，模型可直接看）",
+            "幂等命名：origin_plot 传 graph_name 重复调用会清旧重画，图名稳定",
             "file_path 省略时输出到 ~/dsch_origin_plugin/output（自动命名）",
             "数据 1000 点内秒级完成；不要读 README.md，本速查即完整用法",
         ],
@@ -1289,6 +1376,334 @@ def _list_sheets_impl():
 
 
 # ---------------------------------------------------------------------------
+# 新增能力：读工作表 / 样式应用 / 统计批 / 视觉预览 / 查询
+# ---------------------------------------------------------------------------
+def _read_worksheet_impl(worksheet, columns=None, max_rows=None):
+    """读取工作表列数据（列名 -> 数值列表）+ 列角色信息。"""
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        wks = op.find_sheet("w", worksheet)
+        if not wks:
+            return oerr.fail("worksheet_not_found", f"工作表不存在: {worksheet}",
+                             worksheet=worksheet)
+        ncol = wks.obj.Cols
+        if columns is None:
+            columns = [_col_name_impl(wks, i) for i in range(ncol)]
+        out = {}
+        col_meta = []
+        for c in columns:
+            ci = _col_index_impl(wks, c)
+            if ci is None:
+                return oerr.fail("column_not_found", f"列不存在: {c}", column=str(c))
+            vals = wks.to_list(ci)
+            if max_rows is not None:
+                vals = vals[: int(max_rows)]
+            out[str(c)] = vals
+            col_meta.append({"name": str(c), "index": int(ci), "points": len(vals)})
+        n_rows = max((len(v) for v in out.values()), default=0)
+        return oerr.ok(worksheet=str(wks), columns=out, column_meta=col_meta,
+                       n_rows=int(n_rows), n_columns=len(out),
+                       detail=f"已读取 {len(out)} 列 x {n_rows} 行")
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+def _apply_style_impl(graph, plot_type=None, columns=None, style_mode="default",
+                      family=None, x_title=None):
+    """应用默认排版规则：调色板 + 多序列区分 + 语义轴标题（真机验证可靠）。
+
+    返回 {ok, applied, applied_ops, style_plan}：每一步都给 reason，方便排查。
+    仅当多序列或显式指定 style_mode/family 时改色；单序列保持 Origin 默认。
+    """
+    try:
+        op = _origin_app
+        gp = op.find_graph(graph)
+        if gp is None:
+            return oerr.fail("graph_not_found", f"图不存在: {graph}", graph=graph)
+        gl = gp[0]
+        plots = gl.plot_list() or []
+        n = len(plots)
+        if n == 0:
+            return oerr.ok(applied=False, reason="图中没有 plot（空模板？）")
+        rows_est = 0
+        for p in plots:
+            try:
+                rows_est = max(rows_est, int(getattr(p, "size", 0) or 0))
+            except Exception:
+                pass
+
+        col_names = columns or [f"S{i+1}" for i in range(n)]
+        style_plan = pst.full_style_plan(plot_type or "line", col_names, rows_est,
+                                         style_mode=style_mode, family=family)
+
+        applied_ops = []
+        do_color = (n > 1) or bool(style_mode) or bool(family)
+        if do_color:
+            pal = style_plan["palette"]["colors"]
+            for i, p in enumerate(plots):
+                try:
+                    rgb = pal[i % len(pal)]
+                    p.color = _hex_to_rgb_tuple(rgb)
+                    applied_ops.append(f"plot[{i}].color={rgb}")
+                except Exception:
+                    pass
+        distinct = style_plan["series_distinction"]
+        if distinct["kind"] == "symbol_shape_cycle":
+            for i, p in enumerate(plots):
+                try:
+                    p.symbol_kind = int(distinct["assignments"][i])
+                    applied_ops.append(f"plot[{i}].symbol_kind={distinct['assignments'][i]}")
+                except Exception:
+                    pass
+        if style_plan["readability"]["tweaks"].get("marker_downscale"):
+            for p in plots:
+                try:
+                    p.symbol_size = 6
+                    applied_ops.append("marker_downscale symbol_size=6")
+                except Exception:
+                    pass
+
+        # 轴标题：用 GLayer.axis('x'/'y').title（真机验证可靠）
+        y_title = None
+        if isinstance(style_plan["axis_titles"].get("y"), dict):
+            y_title = style_plan["axis_titles"]["y"].get("title")
+        if y_title:
+            try:
+                gl.axis("y").title = str(y_title)
+                applied_ops.append(f"y.title={y_title!r}")
+            except Exception:
+                pass
+        if x_title:
+            try:
+                gl.axis("x").title = str(x_title)
+                applied_ops.append(f"x.title={x_title!r}")
+            except Exception:
+                pass
+
+        style_plan["applied"] = applied_ops
+        return oerr.ok(applied=True, applied_ops=applied_ops, style_plan=style_plan)
+    except Exception as e:
+        return oerr.fail("origin_operation_error", str(e),
+                         trace=traceback.format_exc(limit=3))
+
+
+def _find_wks_of_plot(gl):
+    try:
+        pl = gl.plot_list() or []
+        if pl:
+            return pl[0].ws
+    except Exception:
+        pass
+    return None
+
+
+def _hex_to_rgb_tuple(hexstr):
+    h = hexstr.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def _ttest_impl(worksheet, column_a, column_b=None, kind="two", paired=False, mu=0.0):
+    """t 检验：one(单样本 vs mu) / two(双样本 Welch) / paired(配对)。"""
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        wks = op.find_sheet("w", worksheet)
+        if not wks:
+            return oerr.fail("worksheet_not_found", f"工作表不存在: {worksheet}",
+                             worksheet=worksheet)
+        a = _col_index_impl(wks, column_a)
+        if a is None:
+            return oerr.fail("column_not_found", f"列不存在: {column_a}", column=str(column_a))
+        va = wks.to_list(a)
+        kind = (kind or "two").lower()
+        if kind == "one":
+            r = oana.ttest_one_sample(va, mu=float(mu))
+        elif kind == "paired":
+            b = _col_index_impl(wks, column_b)
+            if b is None:
+                return oerr.fail("column_not_found", f"列不存在: {column_b}", column=str(column_b))
+            r = oana.ttest_paired(va, wks.to_list(b))
+        else:
+            b = _col_index_impl(wks, column_b)
+            if b is None:
+                return oerr.fail("column_not_found", f"列不存在: {column_b}", column=str(column_b))
+            r = oana.ttest_two_sample(va, wks.to_list(b))
+        if not r.get("ok"):
+            return oerr.fail("empty_data", r.get("error"))
+        return oerr.ok(worksheet=str(wks), column_a=str(column_a),
+                       column_b=str(column_b) if column_b else None, **r)
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+def _anova_impl(worksheet, columns):
+    """单因素方差分析：每组一列。"""
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        wks = op.find_sheet("w", worksheet)
+        if not wks:
+            return oerr.fail("worksheet_not_found", f"工作表不存在: {worksheet}",
+                             worksheet=worksheet)
+        groups = []
+        used = []
+        for c in columns or []:
+            ci = _col_index_impl(wks, c)
+            if ci is None:
+                return oerr.fail("column_not_found", f"列不存在: {c}", column=str(c))
+            groups.append(wks.to_list(ci))
+            used.append(str(c))
+        if len(groups) < 2:
+            return oerr.fail("invalid_request", "ANOVA 需要至少 2 列作为组", columns=used)
+        r = oana.anova_oneway(groups)
+        if not r.get("ok"):
+            return oerr.fail("empty_data", r.get("error"))
+        return oerr.ok(worksheet=str(wks), columns=used, **r)
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+def _pca_impl(worksheet, columns=None, scale=False, n_components=None):
+    """主成分分析（把每列当作变量、每行为样本）。"""
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        wks = op.find_sheet("w", worksheet)
+        if not wks:
+            return oerr.fail("worksheet_not_found", f"工作表不存在: {worksheet}",
+                             worksheet=worksheet)
+        ncol = wks.obj.Cols
+        if columns is None:
+            columns = [_col_name_impl(wks, i) for i in range(ncol)]
+        cols_data = []
+        used = []
+        for c in columns:
+            ci = _col_index_impl(wks, c)
+            if ci is None:
+                return oerr.fail("column_not_found", f"列不存在: {c}", column=str(c))
+            cols_data.append(wks.to_list(ci))
+            used.append(str(c))
+        n_rows = max((len(v) for v in cols_data), default=0)
+        # 样本=行，变量=列
+        matrix = [[cols_data[j][r] if r < len(cols_data[j]) else float("nan")
+                   for j in range(len(cols_data))] for r in range(n_rows)]
+        r = oana.pca(matrix, scale=bool(scale), n_components=n_components)
+        if not r.get("ok"):
+            return oerr.fail("empty_data", r.get("error"))
+        # r 已含 n_samples / n_features / n_components 等，勿重复传同名键
+        return oerr.ok(worksheet=str(wks), columns=used,
+                       n_columns=len(used), **r)
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+def _survival_impl(worksheet, time_column, event_column):
+    """Kaplan-Meier 生存分析：time 列 + 事件列(1=事件,0=删失)。"""
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        wks = op.find_sheet("w", worksheet)
+        if not wks:
+            return oerr.fail("worksheet_not_found", f"工作表不存在: {worksheet}",
+                             worksheet=worksheet)
+        ti = _col_index_impl(wks, time_column)
+        ei = _col_index_impl(wks, event_column)
+        if ti is None or ei is None:
+            return oerr.fail("column_not_found", "time/event 列不存在")
+        r = oana.kaplan_meier(wks.to_list(ti), wks.to_list(ei))
+        if not r.get("ok"):
+            return oerr.fail("empty_data", r.get("error"))
+        return oerr.ok(worksheet=str(wks), time_column=str(time_column),
+                       event_column=str(event_column), **r)
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+def _view_graph_impl(graph=None, max_width=1200, fmt="png"):
+    """把图渲染为临时 PNG，返回 base64（供模型视觉校验），不落盘。"""
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        target = graph or _active_graph_shortname()
+        if not target:
+            return oerr.fail("graph_not_found", "未指定图名且没有活动图页")
+        tmp_dir = os.path.join(DEFAULT_OUTPUT_DIR, "_preview")
+        os.makedirs(tmp_dir, exist_ok=True)
+        tmp = os.path.join(tmp_dir, f"preview_{uuid.uuid4().hex[:8]}.{fmt}")
+        r = _export_impl(target, file_path=tmp, fmt=fmt, width=max_width)
+        if not r.get("ok"):
+            return r
+        try:
+            with open(tmp, "rb") as f:
+                data = f.read()
+        finally:
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+        import base64
+        return oerr.ok(graph=target, format=fmt, size=len(data),
+                       width_px=max_width, image_png_base64=base64.b64encode(data).decode(),
+                       detail=f"图 {target} 渲染为临时 {fmt.upper()}（{len(data)}B，不落盘）")
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+def _active_graph_shortname():
+    op = _origin_app
+    try:
+        gp = op.find_graph()
+        if gp is not None:
+            return gp.obj.GetName()
+    except Exception:
+        pass
+    return None
+
+
+def _list_graphs_impl():
+    """列出当前项目里的图页短名。"""
+    ok, conn = _connect_impl()
+    if not ok:
+        return conn
+    try:
+        op = _origin_app
+        names = []
+        n = op.po.Pages.Count
+        for i in range(n):
+            try:
+                name = str(op.po.Pages(i).GetName())
+                if op.find_graph(name) is not None:
+                    names.append(name)
+            except Exception:
+                pass
+        return oerr.ok(pages=names, count=len(names),
+                       detail=f"共 {len(names)} 个图页")
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+def _error_codes_impl():
+    """列出全部稳定错误码与恢复建议。"""
+    out = {}
+    for code, (recoverable, actions) in oerr.CODE_META.items():
+        out[code] = {"recoverable": recoverable, "next_actions": actions}
+    return oerr.ok(error_codes=out, count=len(out))
+
+
+# ---------------------------------------------------------------------------
 # 公开 API（线程安全：自动投递到专用 COM 线程）
 # ---------------------------------------------------------------------------
 @_synchronized
@@ -1314,10 +1729,11 @@ def write_data(columns, worksheet=None, book_name=None, sheet_name=None):
 
 @_synchronized
 def plot(worksheet, y_columns=None, x_column=None, plot_type="line",
-         graph_name=None, title=None, yerr_column=None):
+         graph_name=None, title=None, yerr_column=None,
+         style_mode="default", family=None):
     return _plot_impl(worksheet, y_columns=y_columns, x_column=x_column,
                       plot_type=plot_type, graph_name=graph_name, title=title,
-                      yerr_column=yerr_column)
+                      yerr_column=yerr_column, style_mode=style_mode, family=family)
 
 
 @_synchronized
@@ -1328,10 +1744,12 @@ def export(graph, file_path=None, fmt="png", width=1200, output_dir=None):
 
 @_synchronized
 def plot_file(columns, plot_type="line", fmt="png", file_path=None, width=1200,
-              output_dir=None, x_column=None, y_columns=None, title=None):
+              output_dir=None, x_column=None, y_columns=None, title=None,
+              graph_name=None, style_mode="default", family=None):
     return _plot_file_impl(columns, plot_type=plot_type, fmt=fmt, file_path=file_path,
                            width=width, output_dir=output_dir, x_column=x_column,
-                           y_columns=y_columns, title=title)
+                           y_columns=y_columns, title=title, graph_name=graph_name,
+                           style_mode=style_mode, family=family)
 
 
 @_synchronized
@@ -1408,3 +1826,53 @@ def plot_contour(data, plot_type="contour", fmt="png", file_path=None, width=120
 @_synchronized
 def list_sheets():
     return _list_sheets_impl()
+
+
+@_synchronized
+def read_worksheet(worksheet, columns=None, max_rows=None):
+    return _read_worksheet_impl(worksheet, columns=columns, max_rows=max_rows)
+
+
+@_synchronized
+def apply_style(graph, plot_type=None, columns=None, style_mode="default",
+                family=None, x_title=None):
+    return _apply_style_impl(graph, plot_type=plot_type, columns=columns,
+                             style_mode=style_mode, family=family, x_title=x_title)
+
+
+@_synchronized
+def ttest(worksheet, column_a, column_b=None, kind="two", paired=False, mu=0.0):
+    return _ttest_impl(worksheet, column_a=column_a, column_b=column_b,
+                       kind=kind, paired=paired, mu=mu)
+
+
+@_synchronized
+def anova(worksheet, columns):
+    return _anova_impl(worksheet, columns=columns)
+
+
+@_synchronized
+def pca(worksheet, columns=None, scale=False, n_components=None):
+    return _pca_impl(worksheet, columns=columns, scale=scale,
+                     n_components=n_components)
+
+
+@_synchronized
+def survival(worksheet, time_column, event_column):
+    return _survival_impl(worksheet, time_column=time_column,
+                          event_column=event_column)
+
+
+@_synchronized
+def view_graph(graph=None, max_width=1400, fmt="png"):
+    return _view_graph_impl(graph=graph, max_width=max_width, fmt=fmt)
+
+
+@_synchronized
+def list_graphs():
+    return _list_graphs_impl()
+
+
+@_synchronized
+def error_codes():
+    return _error_codes_impl()

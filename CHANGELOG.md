@@ -1,6 +1,53 @@
 # Changelog
 
 
+## 2.0.0 (2026-08-18)
+
+排版与统计大版本（工具 16 → 28 个）。设计上参考知名 origin-mcp 的"调色板/轴标题
+语义化/按图型排版"思路并重新实现（clean-room，未复制其代码/文档），新增自研
+OKLab/CVD 可读性度量：
+
+### 排版（origin_plot / origin_plot_file 新增参数）
+- `style_mode`（default/journal/presentation）：期刊单栏 89mm/双栏 183mm、
+  字号/线宽/刻度/几何预设，真正落图；
+- `family`（ocean/nightfall/duo_warm/forest/grey_tone/low_saturation/paired）：
+  OKLab 感知色差 + 白底对比度 + 色盲(CVD)模拟后筛选的调色板；
+- 多序列自动区分：线型/符号循环 + 颜色 → 色盲可读；
+- `graph_name` 幂等命名：重复调用同名清旧重画，图名稳定（不再 Graph2/3）；
+- 语义轴标题：从列名推断单位标题（如 temperature_C → "Temperature (°C)"），
+  经真机验证 GLayer.axis('x'/'y').title 可靠落图；
+- 密集数据自动降符号（marker_downscale），防止糊成一条线。
+- 新增 `plot_style.py`：OKLab 色彩空间 + CVD 模拟 + 对比度 + 可读性计划，
+  每一步给出 reason，可审计。
+
+### 稳定错误码（新增 `origin_errors.py` + `origin_error_codes`）
+- 全部调用返回统一 `error_code / recoverable / next_actions`；
+- `_synchronized` 边界把遗留 `{ok:false}` 自动升级为结构化错误。
+
+### 画图修复
+- **bar 改用 Origin 官方 bar 模板**（真机验证 plotxy 204/215 在 2026b 会渲成
+  面积图或不出图）；
+- box/bar 默认列改为"第二列（首列为 X 的惯例）"；
+- 3D 散点（plotxy 310）经 `wks.activate()` + 页名差检测修复，真机可出图；
+- histogram 校验回归修复。
+
+### 新增工具
+- `origin_catalog`（动态工具目录，文档即实现）、`origin_error_codes`、
+  `origin_list_graphs`、`origin_list_sheets`、`origin_read_worksheet`；
+- `origin_view_graph`：把图渲染为**内联图片**返回（mcp ImageContent），
+  视觉模型可直接看图（你的识图 kimi2.6 也验证过输出）；不落盘、可 `max_width` 控成本；
+- `origin_apply_style`：对已有图补应用排版/调色板/多序列区分；
+- 统计批（纯 numpy 自研，无 scipy）：`origin_ttest`（one/两样本 Welch/paired）、
+  `origin_anova`（单因素 F/p）、`origin_pca`（SVD 载荷/解释方差/得分）、
+  `origin_survival`（Kaplan-Meier + 中位生存时间）；
+  - `ORIGIN_MCP_PROFILE=compact` 可隐藏统计批工具。
+
+### 回归
+- selftest（含新能力）/ mcp-test（28 工具 + 跨协议图片内容）/ concurrency 8/8 /
+  science / advanced / com_smoke / demo 全绿；
+- 视觉校验：styled 3 序列图（X=温度(°C) Y=压力(kPa)，蓝圈/橙三角）、bar 柱状图、
+  密集散点——均经识图模型核对。
+
 ## 1.2.0 (2026-08-18)
 
 DSH 插件市场（awesome-dsh-plugin / dsh-market）收录准备：
