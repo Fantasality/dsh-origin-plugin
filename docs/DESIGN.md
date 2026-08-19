@@ -42,19 +42,7 @@ originpro (OriginExt → comtypes) → Origin64.exe（单实例 COM 自动化服
 | 预览闭环 `origin_view_graph` | 返回 mcp ImageContent（PNG base64），模型不落盘即可视检 |
 | `origin_catalog` 文档即实现 | 工具清单只有一份 TOOL_CATALOG；catalog/help/description 均由此生成 |
 
-### 1.3 clean-room 边界（借鉴 vs 原创）
 
-设计方向上借鉴了 Ge-Shun/origin-mcp 的"参数化工具入口 / 默认排版规则与无障碍
-调色板 / 语义轴标题推断 / 稳定 error_code / 幂等命名 / 预览闭环 / 分层 profile"
-理念，但**全部实现为独立产物**：
-
-- 未复制其任何源码、文档或 `official_docs.generated.json`；
-- OKLab/CVD/对比度度量、Lanczos-γ + 连分数不完全 β 的 t/F 分布、SVD-PCA、
-  KM 表均为本仓库自研（只依赖 numpy）；
-- 轴标题/模板/plotxy 行为全部经本机真机探针确认后才写入代码；
-- README/CHANGELOG/SKILL 均为新撰说明。
-
----
 
 ## 2. 真机探测矩阵（OriginPro 2026b，后台实例实测）
 
