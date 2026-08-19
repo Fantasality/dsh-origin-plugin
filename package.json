@@ -1,9 +1,13 @@
 {
   "name": "dsh-origin-plugin",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Drive Origin scientific plotting from DeepSeek Harness AI chat via MCP - 28 tools, styled multi-series plots, inline image preview, statistics batch (t/ANOVA/PCA/survival), stable error codes.",
   "license": "MIT",
   "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js"
+  },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
   },
@@ -12,6 +16,7 @@
     "url": "git+https://github.com/Fantasality/dsh-origin-plugin.git"
   },
   "files": [
+    "index.js",
     "cordis.patch.yml",
     "README.md",
     "CHANGELOG.md",
@@ -19,6 +24,9 @@
     "requirements.txt",
     "origin_engine.py",
     "origin_mcp_server.py",
+    "origin_errors.py",
+    "plot_style.py",
+    "origin_analysis.py",
     "demo_call.py",
     "run_origin_server.cmd",
     "skills",

@@ -1,6 +1,16 @@
 # Changelog
 
 
+## 2.0.1 (2026-08-19)
+
+插件市场安装修复（对应"nothing installable: …ship no prebuilt artifacts"报错）：
+
+- 新增 `index.js` 预构建入口产物（ESM，零依赖），并声明 `main`/`exports` →
+  市场 `entryArtifactExists` 判定通过，安装**不再需要 allowBuilds 放行**；
+- **修复 2.0.0 tarball 漏包**：`files` 补充 `origin_errors.py` / `plot_style.py` /
+  `origin_analysis.py`（此前缺失会导致装上的插件 import 即崩）；
+- 本地按市场同款逻辑预验证通过（entryArtifactExists=true，hasDshManifest=true）。
+
 ## 2.0.0 (2026-08-18)
 
 排版与统计大版本（工具 16 → 28 个）。设计上参考知名 origin-mcp 的"调色板/轴标题
