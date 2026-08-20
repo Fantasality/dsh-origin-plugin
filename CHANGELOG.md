@@ -1,6 +1,20 @@
 # Changelog
 
 
+## 2.0.5 (2026-08-20)
+
+**修复「已安装，重启后生效」永续显示**：市场安装后重启，dshmarket 仍显示
+「已安装，重启后生效」而非「已安装」。
+
+- **根因**：`index.js` 的 default 导出是纯描述符对象（无 `apply` 方法）→
+  cordis loader 无法为 dsh-origin-plugin 创建 fiber → dshmarket 的
+  `verify.js` `loaderLive` 检查（L109/L149）永远 false → 命中 L162
+  `state='restart'`（重启后生效）分支，即使重启后 mcp-origin fiber 已 active。
+- **修复**：给 default 导出加 no-op `apply()` 方法 → loader 创建 fiber →
+  `loaderLive=true` → 命中 L149 `state='live'`（已安装）。apply 体为空（bundle
+  的运行时价值在 cordis.patch.yml 的 insert mcp-origin，不在 JS 代码）。
+- 功能零影响：28 个 Origin 工具、绘/统计/导出全部不变。
+
 ## 2.0.4 (2026-08-20)
 
 **修复 60s boot 挂起（第三次崩溃根因）**：v2.0.3 发布后用户通过 DSH 插件市场

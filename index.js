@@ -12,9 +12,12 @@
 // a prebuilt bundle (entryArtifactExists) and lets install complete WITHOUT
 // needing build approval (allowBuilds).
 //
-// This module is inert at runtime; DSH does not normally import it. It is a
-// dependency-free ESM shim that documents the bundle, and being importable is
-// a useful canary: if anything ever does import it, it must not throw.
+// This module carries a no-op `apply` so the cordis loader creates a fiber
+// for dsh-origin-plugin itself. Without it, the bundle has no fiber of its
+// own (only the mcp-origin insert does), and the plugin market's installed-
+// state check (verify.js → loaderLive) reads it as perpetually "restart to
+// apply" even after a restart. The apply body is empty: this bundle's
+// runtime value is in cordis.patch.yml (insert mcp-origin), not in JS code.
 
 import { readFileSync } from 'node:fs'
 
@@ -38,4 +41,9 @@ export function describe() {
   return plugin
 }
 
-export default plugin
+/** Cordis plugin entry: a no-op apply so the loader creates a fiber for
+ *  dsh-origin-plugin, which lets the plugin market read it as "live/active"
+ *  (verify.js L149: if (loaderLive) → state='live') instead of perpetually
+ *  "restart to apply" (L162: if (inBundles && !loaderLive) → state='restart').
+ *  The real tools are mounted by the mcp-origin insert in cordis.patch.yml. */
+export default { ...plugin, apply() {} }
