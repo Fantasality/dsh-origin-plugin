@@ -75,3 +75,11 @@
           PYTHONUNBUFFERED: '1'
         failOnStartupError: false
         toolCallTimeoutMs: 120000
+    # Self-mount: a no-op fiber so the plugin market reads this bundle as
+    # "live/active" (verify.js liveIncludes checks for the package name in the
+    # loader entry-name set). Without this row the only entry name is
+    # @deepseek-ai/dsh-mcp-client, so liveIncludes('dsh-origin-plugin')=false
+    # and the market perpetually shows "restart to apply" even after restart.
+    # apply() in index.js is a no-op; the real tools come from mcp-origin above.
+    - id: dsh-origin-plugin
+      name: dsh-origin-plugin

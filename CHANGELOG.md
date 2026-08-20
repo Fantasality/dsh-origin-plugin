@@ -1,6 +1,23 @@
 # Changelog
 
 
+## 2.0.6 (2026-08-20)
+
+**修复「已安装，重启后生效」永续显示（v2.0.5 修复方向修正）**：
+
+- v2.0.5 给 index.js 加了 no-op `apply()`，但修复方向错误：问题不在 apply 方法，
+  而在于 dshmarket `verify.js` 的 `liveIncludes(live, name)` 检查的是 **insert 行
+  的 `name:` 字段值**（loader entry names），不是 loader 注册表里的 fiber。
+  dsh-origin-plugin 的 insert name 是 `@deepseek-ai/dsh-mcp-client`（不是自己的
+  包名），所以 `liveIncludes(live, 'dsh-origin-plugin')` 永远 false →
+  `loaderLive=false` → 命中 `state='restart'` 分支。
+- **v2.0.6 修复**：在 cordis.patch.yml 加一条 no-op insert
+  `{ id: dsh-origin-plugin, name: dsh-origin-plugin }`，让 loader 为 dsh-origin-plugin
+  自身创建 fiber → live 集合包含 `dsh-origin-plugin` → `loaderLive=true` →
+  `state='live'`（已安装）。apply() 是 no-op；真正的工具来自 mcp-origin insert。
+- 功能零影响：28 个 Origin 工具、绘/统计/导出全部不变。
+
+
 ## 2.0.5 (2026-08-20)
 
 **修复「已安装，重启后生效」永续显示**：市场安装后重启，dshmarket 仍显示
