@@ -1,4 +1,4 @@
-# dsh-origin-plugin — DeepSeek Harness × Origin 绘图（bundle 层，v2.0.2 市场适配版）
+# dsh-origin-plugin — DeepSeek Harness × Origin 绘图（bundle 层，v2.0.4 同步传输版）
 #
 # 通过 DSH 官方 @deepseek-ai/dsh-mcp-client 把本仓库的 Python MCP server
 # （origin_mcp_server.py，stdio）注册为原生工具：
@@ -18,6 +18,18 @@
 #   否则 DSH 会以 "duplicate loader entry id: mcp-origin" 直接启动失败。
 #   覆盖时请用「config-only 覆盖」（见下）。
 #
+# ── v2.0.4 同步传输要点（修复 60s boot 挂起） ──
+# ▸ 服务器 stdio 传输改为纯同步 JSON-RPC 循环（origin_mcp_server.py 的
+#   _sync_stdio_server()），不再走 mcp 2.0.0 的 anyio.run →
+#   asyncio.ProactorEventLoop。后者 _make_self_pipe 用 _socket.socketpair()
+#   fallback（127.0.0.1 listen+connect+accept），在防火墙/安全软件屏蔽回环
+#   accept 的环境下永久阻塞 → 事件循环建不起来 → 服务器永不响应 initialize →
+#   MCP SDK 60s 超时(DEFAULT_REQUEST_TIMEOUT_MSEC) → DSH boot 挂 60s →
+#   desktop guard 回滚。同步循环用 sys.stdin.readline + sys.stdout.buffer.flush，
+#   毫秒级握手，零事件循环/回环依赖。28 个工具函数不变（功能零影响）。
+# ▸ args 加 -u + env 加 PYTHONUNBUFFERED=1：双重保险，确保 stdout 即时 flush
+#   （同步循环已显式 flush，此为兜底防任何 stray print 缓冲）。
+#
 # 前置要求（详见 README「快速开始」）：
 #   · Windows + 已安装 Origin（实测 OriginPro 2026b，2018+ 一般均可）
 #   · Python 3.10+，并按 README 创建 venv 安装依赖：
@@ -33,9 +45,10 @@
 #             serverName: origin
 #             transport: stdio
 #             command: C:/Users/<你>/dsh_origin_plugin/.venv/Scripts/python.exe
-#             args: [-X, utf8, C:/Users/<你>/dsh_origin_plugin/origin_mcp_server.py]
+#             args: [-u, -X, utf8, C:/Users/<你>/.dsh/profiles/web/node_modules/dsh-origin-plugin/origin_mcp_server.py]
 #             env:
 #               PYTHONIOENCODING: utf-8
+#               PYTHONUNBUFFERED: '1'
 #             failOnStartupError: false
 #             toolCallTimeoutMs: 120000
 #     （层级：bundle patch → profile patch → $DSH_HOME/cordis.patch.yml，后层覆盖先层。）
@@ -52,11 +65,13 @@
         transport: stdio
         command: python
         args:
+          - '-u'
           - '-X'
           - utf8
           - !!js (process.env.DSH_HOME || (String(process.env.USERPROFILE) + '/.dsh')) + '/profiles/web/node_modules/dsh-origin-plugin/origin_mcp_server.py'
         cwd: !!js (process.env.DSH_HOME || (String(process.env.USERPROFILE) + '/.dsh')) + '/profiles/web/node_modules/dsh-origin-plugin'
         env:
           PYTHONIOENCODING: utf-8
+          PYTHONUNBUFFERED: '1'
         failOnStartupError: false
         toolCallTimeoutMs: 120000

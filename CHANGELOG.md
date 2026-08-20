@@ -1,6 +1,43 @@
 # Changelog
 
 
+## 2.0.4 (2026-08-20)
+
+**修复 60s boot 挂起（第三次崩溃根因）**：v2.0.3 发布后用户通过 DSH 插件市场
+重装，但 npm registry 仍是 2.0.1 旧码（npm 未认证无法 publish），导致桌面第三次
+在 60s 签名崩溃。即便装上 v2.0.3，根因仍在 —— 现已定位并彻底修复。
+
+- **服务器 stdio 传输改为纯同步 JSON-RPC 循环**（`origin_mcp_server.py` 新增
+  `_sync_stdio_server()`，替代 `mcp.run(transport="stdio")`）。根因链：
+  mcp 2.0.0 的 stdio 传输走 `anyio.run` → `asyncio.ProactorEventLoop.__init__`
+  → `_make_self_pipe` → `_socket.socketpair()` fallback（Windows Python 无
+  `_socket.socketpair`，走 127.0.0.1 listen+connect+accept）。在防火墙/安全软件
+  屏蔽回环 accept 的环境下，accept() 永久阻塞 → 事件循环建不起来 → 服务器永不
+  响应 `initialize` → MCP SDK `DEFAULT_REQUEST_TIMEOUT_MSEC=60000`（60s）超时 →
+  dsh-mcp-client `apply()` 阻塞在 `await connection.ready` → DSH boot 挂 60s →
+  desktop guard 回滚。**同步循环用 `sys.stdin.readline` +
+  `sys.stdout.buffer.write+flush`，毫秒级握手，零事件循环/回环依赖。** 已实测：
+  initialize + tools/list（28 工具）+ tools/call(origin_catalog) 全部 <1s 返回，
+  无 stderr，无挂起。28 个工具函数 + `--selftest`/`--mcp-test`/`--json-echo` 路径
+  全部保留不变（功能零影响）。
+- **args 加 `-u` + env 加 `PYTHONUNBUFFERED=1`**（cordis.patch.yml +
+  register_to_dsh.ps1）：双重保险，确保任何 stdout 写入即时 flush（同步循环已
+  显式 `sys.stdout.buffer.flush()`，此为兜底防 stray print 缓冲）。
+- **register_to_dsh.ps1 路径修正**：venv 路径 `dsch_origin_plugin` →
+  `dsh_origin_plugin`（匹配实际 venv 位置）；server 指向已安装 bundle 的
+  `node_modules/dsh-origin-plugin/origin_mcp_server.py`；profile patch 路径改为
+  `%USERPROFILE%\.dsh\profiles\web\cordis.patch.yml`（当前 DSH Desktop 布局）。
+- **MCP SDK spawn 语义取证**：`@modelcontextprotocol/sdk` 的
+  `StdioClientTransport` 用 `cross-spawn` + `shell: false`（非 shell:true），含空格
+  路径不会被拆断；`DEFAULT_REQUEST_TIMEOUT_MSEC=60000`（protocol.js L8/L12）。
+  mcp 2.0.0 `stdout_writer()` 确实 `await stdout.flush()`（stdio.py L205）→ 排除
+  缓冲假设，根因锁定在 anyio/ProactorEventLoop 的回环 socketpair fallback。
+
+> 注：npm registry 上 `dsh-origin-plugin` latest 仍是 2.0.1（npm 未认证）。
+> v2.0.4 通过 GitHub Release 发布 tgz。用户需从 GitHub Release 手动安装，或
+> 自行 `npm publish` 同步。
+
+
 ## 2.0.3 (2026-08-19)
 
 **发布事故修复**：2.0.2 的修复提交（commit `b488b76`）当时**没有推送到 GitHub**，

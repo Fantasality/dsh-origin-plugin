@@ -668,6 +668,188 @@ def _concurrency_test():
     print("CONCURRENCY-TEST OK")
 
 
+# ---------------------------------------------------------------------------
+# 同步 stdio JSON-RPC 服务器（无 anyio / 无事件循环 / 显式 flush）
+# ---------------------------------------------------------------------------
+# 设计动机：mcp 2.0.0 的 stdio 传输走 anyio.run → asyncio.ProactorEventLoop，
+# 其 _make_self_pipe 用 _socket.socketpair() fallback（127.0.0.1 listen+connect+
+# accept）。在某些 Windows 环境（防火墙/安全软件屏蔽回环 socketpair 的 accept，
+# 或 Python 构建无 _socket.socketpair）下 accept() 永久阻塞 → 事件循环创建不出
+# 来 → 服务器永不响应 initialize → MCP SDK 60s 超时(DEFAULT_REQUEST_TIMEOUT_MSEC)
+# → DSH boot 挂 60s → desktop guard 回滚。本实现用纯同步 sys.stdin.readline +
+# sys.stdout.buffer.write+flush 规避全部事件循环/回环依赖，握手毫秒级返回。
+# 所有 28 个工具函数（@mcp.tool 装饰的原函数）照常调用，功能零影响。
+_PROTO_FALLBACK = "2024-11-05"
+
+
+def _infer_json_type(ann):
+    """把 Python 类型注解映射到 JSON Schema type 字符串。"""
+    if ann in (str,) or ann is None or ann is type(None):
+        return "string"
+    if ann is int:
+        return "integer"
+    if ann is float:
+        return "number"
+    if ann is bool:
+        return "boolean"
+    if ann in (list, tuple):
+        return "array"
+    if ann is dict:
+        return "object"
+    origin = getattr(ann, "__origin__", None)
+    if origin in (list, tuple):
+        return "array"
+    if origin is dict:
+        return "object"
+    return "string"
+
+
+def _build_tool_registry():
+    """从 TOOL_CATALOG + 本模块全局函数构建同步分发注册表（name→meta+fn）。"""
+    import inspect
+    registry = {}
+    for entry in TOOL_CATALOG:
+        name = entry["name"]
+        fn = globals().get(name)
+        if not callable(fn):
+            continue
+        sig = inspect.signature(fn)
+        properties = {}
+        required = []
+        for pname, param in sig.parameters.items():
+            ann = param.annotation if param.annotation is not inspect.Parameter.empty else str
+            properties[pname] = {"type": _infer_json_type(ann)}
+            if param.default is inspect.Parameter.empty:
+                required.append(pname)
+        doc = (fn.__doc__ or entry.get("desc", "") or "").strip()
+        registry[name] = {
+            "name": name,
+            "description": doc,
+            "inputSchema": {"type": "object", "properties": properties, "required": required},
+        }
+    return registry
+
+
+def _result_to_content_blocks(result):
+    """把工具返回值（dict / list[TextContent|ImageContent]）转成 MCP content 块。"""
+    if isinstance(result, list):
+        blocks = []
+        for item in result:
+            t = getattr(item, "type", None)
+            if t is None and isinstance(item, dict):
+                t = item.get("type")
+            if t == "text":
+                txt = getattr(item, "text", None)
+                if txt is None and isinstance(item, dict):
+                    txt = item.get("text")
+                blocks.append({"type": "text", "text": txt or str(item)})
+            elif t == "image":
+                data = getattr(item, "data", None)
+                if data is None and isinstance(item, dict):
+                    data = item.get("data", "")
+                mime = getattr(item, "mime_type", None) or getattr(item, "mimeType", None)
+                if mime is None and isinstance(item, dict):
+                    mime = item.get("mimeType") or item.get("mime_type")
+                blocks.append({"type": "image", "data": data or "", "mimeType": mime or "image/png"})
+            elif isinstance(item, dict):
+                blocks.append(item)
+        return blocks or [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]
+    if isinstance(result, dict):
+        return [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]
+    return [{"type": "text", "text": str(result)}]
+
+
+def _write_jsonrpc(resp):
+    """写一行 JSON-RPC 到 stdout（二进制 buffer + 显式 flush，避免 CRLF/缓冲吞响应）。"""
+    payload = json.dumps(resp, ensure_ascii=False) + "\n"
+    try:
+        sys.stdout.buffer.write(payload.encode("utf-8"))
+        sys.stdout.buffer.flush()
+    except (AttributeError, ValueError, OSError):
+        sys.stdout.write(payload)
+        sys.stdout.flush()
+
+
+def _sync_stdio_server():
+    """纯同步 stdio JSON-RPC 服务器（MCP 协议兼容）。
+
+    替代 mcp.run(transport="stdio")：不依赖 anyio / 事件循环 / 回环 socket。
+    支持 initialize / notifications/initialized / ping / tools/list / tools/call。
+    握手毫秒级返回，永不因事件循环阻塞导致 60s 超时。
+    """
+    import inspect
+    registry = _build_tool_registry()
+    tool_fns = {name: globals()[name] for name in registry if callable(globals().get(name))}
+
+    for raw in sys.stdin:
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue  # 坏行静默跳过
+        if not isinstance(req, dict):
+            continue
+        msg_id = req.get("id")
+        method = req.get("method", "")
+        params = req.get("params") or {}
+
+        # 通知（id 为 None）无需响应
+        if msg_id is None:
+            continue
+
+        if method == "initialize":
+            client_pv = params.get("protocolVersion") if isinstance(params, dict) else None
+            pv = client_pv if client_pv else _PROTO_FALLBACK
+            _write_jsonrpc({"jsonrpc": "2.0", "id": msg_id, "result": {
+                "protocolVersion": pv,
+                "capabilities": {"tools": {"listChanged": False}},
+                "serverInfo": {"name": "origin", "version": "2.0.0"},
+            }})
+        elif method == "ping":
+            _write_jsonrpc({"jsonrpc": "2.0", "id": msg_id, "result": {}})
+        elif method == "tools/list":
+            _write_jsonrpc({"jsonrpc": "2.0", "id": msg_id,
+                            "result": {"tools": list(registry.values())}})
+        elif method == "tools/call":
+            tname = params.get("name", "") if isinstance(params, dict) else ""
+            args = params.get("arguments") or {}
+            if not isinstance(args, dict):
+                args = {}
+            fn = tool_fns.get(tname)
+            if fn is None:
+                _write_jsonrpc({"jsonrpc": "2.0", "id": msg_id, "result": {
+                    "content": [{"type": "text", "text": json.dumps(
+                        {"ok": False, "error": f"unknown tool: {tname}",
+                         "error_code": "UNKNOWN_TOOL"}, ensure_ascii=False)}],
+                    "isError": True,
+                }})
+            else:
+                try:
+                    sig = inspect.signature(fn)
+                    valid = {k: v for k, v in args.items() if k in sig.parameters}
+                    result = fn(**valid)
+                    _write_jsonrpc({"jsonrpc": "2.0", "id": msg_id, "result": {
+                        "content": _result_to_content_blocks(result),
+                        "isError": False,
+                    }})
+                except Exception as exc:
+                    import traceback
+                    _write_jsonrpc({"jsonrpc": "2.0", "id": msg_id, "result": {
+                        "content": [{"type": "text", "text": json.dumps({
+                            "ok": False, "error": str(exc),
+                            "error_code": "TOOL_EXCEPTION",
+                            "traceback": traceback.format_exc(),
+                        }, ensure_ascii=False)}],
+                        "isError": True,
+                    }})
+        else:
+            _write_jsonrpc({"jsonrpc": "2.0", "id": msg_id, "error": {
+                "code": -32601, "message": f"method not found: {method}",
+            }})
+
+
 if __name__ == "__main__":
     arg = sys.argv[1] if len(sys.argv) > 1 else ""
     if arg == "--selftest":
@@ -679,4 +861,4 @@ if __name__ == "__main__":
     elif arg == "--json-echo":  # 供外部快速探测
         print(json.dumps({"server": "origin", "ok": True, "version": "2.0.0"}))
     else:
-        mcp.run(transport="stdio")
+        _sync_stdio_server()
