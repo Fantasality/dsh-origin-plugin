@@ -3,3 +3,4 @@ mcp>=1.0
 originpro
 pywin32
 numpy
+openpyxl

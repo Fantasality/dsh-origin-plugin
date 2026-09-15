@@ -4,13 +4,17 @@
 
 - 🤖 对话触发：`「用 Origin 画 y=x² 折线图并导出 PNG」` → 模型自动调用工具 → 图片落盘
 - 🔌 官方 MCP 桥接：通过 DSH 内置的 `@deepseek-ai/dsh-mcp-client` 注册为原生工具 `mcp__origin__*`
-- 🎨 **28 个工具**：2D 图 line/scatter/line_symbol/column/**histogram/box/bar** + 误差棒、3D、等高线、统计批
-- ✨ **期刊级排版**：`style_mode`(journal/presentation) + `family` 调色板 + 幂等 `graph_name` + 语义轴标题
-- 👁 **内联预览**：`origin_view_graph` 直接把图渲染成图片内容返回，视觉模型无需落盘即可核对
+- 🎨 **35 个工具**：2D 图 line/scatter/line_symbol/column/**histogram/box/bar** + 误差棒、3D、等高线、统计批
+- 📂 **文件导入**：`origin_load_file` 直接读 CSV/TXT/XLSX/XLS（中文路径/编码安全）
+- 🧩 **领域模板**：多谱线堆叠偏移 / XRD 三件套 / 双Y轴 / 森林图 / 多面板（`origin_plot_template`）
+- 📋 **绘图计划确认流**：`origin_plot_plan` 逐列画像+待确认问题 → `origin_execute_plan` 执行（不确定列先问）
+- 📦 **可信交付**：`origin_export_delivery` 一键交付目录（图片+**可编辑 OPJU**）；`origin_save_project` 单独存工程
+- ✨ **期刊级排版**：`style_mode`(journal/presentation) + `family` 调色板（带使用约束）+ 幂等 `graph_name` + 语义轴标题 + `style_overrides` 显式样式逐项回报
+- 👁 **双保险校验**：`origin_view_graph` 内联图片（模型看）+ `origin_verify_graph` 确定性反读（程序核）
 - 🧮 **统计批**：t 检验 / ANOVA / PCA / Kaplan-Meier 生存分析（纯 numpy 自研）
-- 🧪 科学分析：删点、线性/非线性拟合、FFT、积分 AUC、变换、相关、峰检、直方图
 - 🛡 **稳定错误码**：全部调用返回 `error_code / recoverable / next_actions` 三件套，模型可安全分支
-- 🔒 多会话并发安全：专用 COM 线程 + 单实例语义，实测 8 线程并发 8/8 通过
+- 🤝 **能力握手**：`origin_status` 返回 Origin 版本 + 已知坑矩阵（真机探针结论数据化）+ 特性表
+- 🔒 多会话并发安全：专用 COM 线程 + 单实例语义，实测 8 线程并发 8/8 通过；`ORIGIN_SESSION=isolated` 不劫持用户窗口
 
 ![示例输出图](docs/example.png)  ![3D 表面示例](docs/example_3d.png)
 
@@ -161,7 +165,7 @@ powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\dsh_origin_plugin\regist
 1. **`origin-plotting` skill（DSH 原生机制）**：安装时自动写入
    `%APPDATA%\dsh-desktop\harness\skills\origin-plotting\SKILL.md` 与
    `~/.dsh\skills\origin-plotting\SKILL.md`。模型目录可见该 skill，按需加载后
-   直接获得：数据格式、28 工具速查表、12 个任务模板——**不用再读 README**；
+   直接获得：数据格式、35 工具速查表、科学边界、12+ 个任务模板——**不用再读 README**；
 2. **`mcp__origin__origin_help` 工具**：不连接 Origin、约 1ms 返回同一份速查
    （JSON 格式，含 usage/tools/templates/tips），任何时刻可调用。
 
@@ -197,6 +201,13 @@ powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\dsh_origin_plugin\regist
 | `origin_anova` | 单因素方差分析（每组一列） | `columns` |
 | `origin_pca` | 主成分分析（载荷/解释方差/得分） | `columns`, `scale`, `n_components` |
 | `origin_survival` | Kaplan-Meier 生存分析 | `time_column`, `event_column` |
+| `origin_load_file` | **导入本地文件** CSV/TXT/XLSX/XLS（中文安全） | `path`, `sheet`?, `worksheet`? |
+| `origin_plot_plan` | **绘图计划**（离线：逐列画像+角色建议+待确认问题） | `columns`, `plot_type` |
+| `origin_execute_plan` | **执行计划**（按 plan_id 写数→画图→导出） | `plan_id` |
+| `origin_plot_template` | **领域模板**：stacked_spectra/xrd_pattern/dual_y/forest/multi_panel | `template_id`, `data` |
+| `origin_verify_graph` | **确定性反读**（轴标题/字号/几何/图例/文件完整性） | `graph`, `expected_*` |
+| `origin_save_project` | **保存可编辑 OPJU 工程** | `path` |
+| `origin_export_delivery` | **一键交付目录**（源文件同级，图片+OPJU+核验） | `graph`, `source_path`, `fmts` |
 
 ## 进阶能力
 
@@ -335,45 +346,51 @@ Origin 是**单实例 COM 自动化服务器**，且 comtypes 的 COM 接口指�
 
 ```
 dsh-origin-plugin/
-├── origin_engine.py          # 核心引擎：连接/写数/画图/导出/线程/错误升级
-├── origin_errors.py          # 稳定错误码：枚举/恢复建议/遗留错误升级（v2 新增）
-├── plot_style.py             # OKLab 调色板 + CVD 模拟 + 布局预设（v2 新增）
-├── origin_analysis.py        # 纯 numpy 统计：t/ANOVA/PCA/似然 KM（v2 新增）
-├── origin_mcp_server.py      # MCP 服务器（28 工具注册式），自带自测模式
+├── origin_engine.py          # 核心引擎：连接/写数/画图/导出/线程/错误升级/模板/交付/验证
+├── origin_errors.py          # 稳定错误码：枚举/恢复建议/遗留错误升级
+├── plot_style.py             # OKLab 调色板 + CVD 模拟 + 布局预设 + 使用约束
+├── origin_analysis.py        # 纯 numpy 统计：t/ANOVA/PCA/似然 KM
+├── origin_fileio.py          # 文件导入：CSV/TXT/XLSX/XLS（多编码/嗅探/表头识别）
+├── origin_plan.py            # 绘图计划：列画像/角色建议/待确认问题/plan_id 缓存
+├── origin_verify.py          # 确定性反读：轴标题/字号/几何/图例/文件完整性
+├── origin_mcp_server.py      # MCP 服务器（35 工具注册式），自带自测模式
 ├── demo_call.py              # 最小可运行示例（不依赖 MCP）
 ├── register_to_dsh.ps1       # 注册脚本（幂等/UTF-8 安全/自动备份）
 ├── unregister_from_dsh.ps1   # 卸载脚本
+├── skills/
+│   └── origin-plotting/SKILL.md  # DSH 原生 skill（模型速查，35 工具 + 科学边界）
 ├── smoke/
 │   ├── origin_com_smoke_test.py   # COM 链路冒烟测试
 │   ├── advanced_test.py           # 删点/拟合/3D
 │   ├── science_test.py            # 直方图/误差棒/等高线…
-│   └── mcp_handshake_test.mjs     # 用 DSH 同款 Node SDK 验证 MCP 握手
+│   └── mcp_handshake_test.mjs     # 用 DSH 同款 Node SDK 验证 MCP 握手（机器无关）
 └── docs/
-    ├── DESIGN.md              # 设计蓝图 + 真机探测矩阵 + 官方文档依据（v2 新增）
-    ├── example.png            # 示例输出图
-    ├── example_style.png      # v2 排版示例（3 序列/轴标题/调色板）
-    ├── example_bar.png        # 柱状图（模板修复后）
-    └── example_3d.png         # 3D 表面示例
+    ├── DESIGN.md              # 设计蓝图 + 真机探测矩阵 + 官方文档依据
+    └── example*.png           # 真机示例图
 ```
 
 ## 自测
 
 ```bat
-:: 引擎级全链路（写数→画图→PNG→SVG）
+:: 离线自测（不连 Origin，CI 可跑）
+.venv\Scripts\python.exe -X utf8 origin_mcp_server.py --offline-test
+
+:: 引擎级全链路（写数/导入/画图/计划流/模板/交付/验证/OPJU）
 .venv\Scripts\python.exe -X utf8 origin_mcp_server.py --selftest
 
 :: 8 线程并发稳定性
 .venv\Scripts\python.exe -X utf8 origin_mcp_server.py --concurrency-test
 
-:: MCP 协议级（模拟 DSH 客户端，验证 28 个工具 + 跨协议图片内容）
+:: MCP 协议级（模拟 DSH 客户端）
 .venv\Scripts\python.exe -X utf8 origin_mcp_server.py --mcp-test
 
-:: 进阶能力（删点/拟合/3D）+ 科学分析
+:: 用 DSH 自带 Node MCP SDK 握手（与 dsh-mcp-client 同款，机器无关自动探测）
+node smoke\mcp_handshake_test.mjs
+
+:: COM 链路冒烟 / 进阶能力 / 科学分析
+.venv\Scripts\python.exe -X utf8 smoke\origin_com_smoke_test.py
 .venv\Scripts\python.exe -X utf8 smoke\advanced_test.py
 .venv\Scripts\python.exe -X utf8 smoke\science_test.py
-
-:: 用 DSH 自带 Node MCP SDK 握手（与 dsh-mcp-client 同款）
-node smoke\mcp_handshake_test.mjs
 
 :: 最小调用示例
 .venv\Scripts\python.exe -X utf8 demo_call.py
@@ -384,7 +401,10 @@ node smoke\mcp_handshake_test.mjs
 - [ ] smoke 测试输出 `RESULT: OK`，`output\comtest.png` 存在
 - [ ] `--selftest` 输出 `SELFTEST OK`（含样式应用/幂等命名/预览/错误码/统计批）
 - [ ] `--concurrency-test` 输出 `CONCURRENCY-TEST OK`（8/8）
-- [ ] `--mcp-test` 输出 `MCP-TEST OK`（28 工具可见，view_graph 返回 image 内容）
+- [ ] `--offline-test` 输出 `OFFLINE-TEST OK`（35 工具注册 + 计划流 + 文件 IO）
+- [ ] `--selftest` 输出 `SELFTEST OK`（含导入/计划流/模板/交付/反读/样式覆盖）
+- [ ] `--concurrency-test` 输出 `CONCURRENCY-TEST OK`（8/8）
+- [ ] `--mcp-test` 输出 `MCP-TEST OK`（35 工具可见，view_graph 返回 image 内容）
 - [ ] `origin_view_graph` 的返回能被识图模型正确读出轴标题/图型/配色
 - [ ] `mcp_handshake_test.mjs` 输出 `HANDSHAKE-TEST OK`
 - [ ] `register_to_dsh.ps1` 执行成功，`dsh --profile web --dump-config` 可见 mcp-origin
@@ -400,21 +420,20 @@ node smoke\mcp_handshake_test.mjs
 | Origin 弹模态对话框导致调用卡住 | 自动化期间不要手动操作 Origin；关闭对话框重试 |
 | 中文乱码 | 不要用 `Add-Content` 等 ANSI 方式追加 YAML；脚本已内置 UTF-8 写入 |
 | 换机器 | 改 `register_to_dsh.ps1` 中的路径或直接编辑 patch 条目 |
+| isolated 模式报 origin_busy_user_session | 预期行为：隔离模式不劫持已打开的 Origin，关掉它或切回 attach |
 
-## 设计借鉴与 clean-room
+## 实现声明
 
-v2 的排版方向受 [Ge-Shun/origin-mcp](https://github.com/Ge-Shun/origin-mcp)
-的"调色板 / 轴标题语义化 / 按图型排版"设计理念启发，但**全部代码为全新实现**：
-
-- 未复制其任何源码、文档或 `official_docs.generated.json`；
 - `plot_style.py` 的 OKLab 色差 / CVD 模拟 / 对比度度量、`origin_analysis.py` 的
-  t / ANOVA / PCA / KM 均为本仓库独立实现（仅依赖 numpy）；
-- 所有轴标题/模板/plotxy 行为均在本机 Origin 2026b **真机探针**验证后写入。
+  t / ANOVA / PCA / KM、`origin_fileio.py` 的编码/分隔符探测均为本仓库独立实现
+  （仅依赖 numpy / openpyxl）；
+- 所有轴标题/模板/plotxy/双Y模板行为均在本机 Origin 真机探针验证后写入，
+  未验证的写回 API 一律明确拒绝而非猜测落图。
 
 ## 精简模式（可选）
 
 设置 `ORIGIN_MCP_PROFILE=compact` 可从工具集隐藏统计批（ttest/anova/pca/survival），
-适合只需要画图+基础分析的场景；其余 24 个工具不变。
+适合只需要画图+基础分析的场景；其余 31 个工具不变。
 
 ## License
 

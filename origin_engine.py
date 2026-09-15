@@ -22,6 +22,7 @@ DSH Origin 画图插件 —— 核心引擎
 5. 出错永不崩溃：所有公开函数返回结构化 dict，异常被转换为
    {"ok": false, "error": ...}，并保证队列/锁状态一致。
 """
+import json
 import os
 import queue
 import re
@@ -72,6 +73,64 @@ PLOT_TYPES_CN = {
     "contour": "等高线", "contour_fill": "填充等高线", "3d_wire": "3D线框",
     "3d_surface": "3D表面",
 }
+
+# ---------------------------------------------------------------------------
+# 领域模板注册表（origin_plot_template；每条都只用"真机验证过的原语"搭建）
+# ---------------------------------------------------------------------------
+PLOT_TEMPLATES = {
+    "stacked_spectra": {
+        "desc": "多谱线纵向堆叠偏移（XPS/UV-Vis/PL/FTIR 多样品对比）",
+        "data": "{'x': [..], 'spectra': {'谱线名': [..], ...}}",
+        "options": "offset='auto'|数值（相邻谱线间距）；reverse_x=True 反转 X（结合能惯例）",
+    },
+    "xrd_pattern": {
+        "desc": "XRD 三件套：Observed 散点 + Calculated 线 + Difference 下移线（可加相刻线）",
+        "data": "{'two_theta': [..], 'observed': [..], 'calculated': [..], "
+                "'difference': 可选, 'phases': {'相名': [2θ位置...]} 可选}",
+        "options": "difference_offset='auto'（Difference 相对主谱下移量，默认 12% 谱高）",
+    },
+    "dual_y": {
+        "desc": "双 Y 轴图（左右轴各一条序列，DUALY 模板，缺失时结构化报错）",
+        "data": "{'x': [..], 'left': [..], 'right': [..], "
+                "'left_name': 可选, 'right_name': 可选}",
+        "options": "left_name/right_name 轴标题",
+    },
+    "forest": {
+        "desc": "森林图：效应量点 + 置信区间横线 + 零参考线（Meta 分析/回归系数）",
+        "data": "{'labels': [研究名...], 'effect': [..], 'ci_low': [..], 'ci_high': [..]}",
+        "options": "zero=0（参考线位置）",
+    },
+    "multi_panel": {
+        "desc": "多面板纵向堆叠（每面板一条序列，共享 X）",
+        "data": "{'x': [..] 可选（缺省用行号）, 'panels': {'面板名': [..], ...}}",
+        "options": "无",
+    },
+}
+
+# ---------------------------------------------------------------------------
+# 已知版本风险矩阵（origin_status.capabilities 暴露；真机探针结论数据化）
+# ---------------------------------------------------------------------------
+CAPABILITY_KNOWN_RISKS = [
+    {"code": "plotxy_type_204_215", "severity": "high", "versions": ["2026b"],
+     "note": "LabTalk plotxy 图型代码 204/215 可能渲染成面积图或不出图",
+     "workaround": "box/bar 已内置改走 Origin 官方模板；请勿直接传 plotxy 代码"},
+    {"code": "multi_origin_instances", "severity": "high", "versions": ["all"],
+     "note": "多个 Origin64 进程会让 COM 连接错实例（LT_execute 报异常）",
+     "workaround": "只保留一个主实例；origin_status 返回进程数警告"},
+    {"code": "com_thread_affinity", "severity": "medium", "versions": ["all"],
+     "note": "comtypes/OriginExt 的 COM 接口指针有线程亲和性，跨线程调用报"
+             "「对象没有连接到服务器」",
+     "workaround": "引擎已用专用 COM 线程串行化，调用方无需处理"},
+    {"code": "modal_dialog_blocks_com", "severity": "medium", "versions": ["all"],
+     "note": "Origin 弹出模态对话框时 COM 调用会挂起",
+     "workaround": "自动化期间不要手动操作 Origin；关闭对话框后重试"},
+    {"code": "dualy_template_local", "severity": "low", "versions": ["all"],
+     "note": "双 Y 模板名因版本而异（2026 实测 doubley/righty 可用，dualy 不存在），"
+             "origin_plot_template=dual_y 会按 dualy/doubley/righty 顺序探测",
+     "workaround": "全部不可用时改用 origin_plot 双序列或 stacked_spectra"},
+]
+
+_ORIGIN_VERSION_LABELS = {10.15: "Origin 2024b"}
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +249,78 @@ def _origin_running():
         return None
 
 
+def _isolated_session_blocked():
+    """ORIGIN_SESSION=isolated 时的隔离守卫：已有 Origin 在运行则拒绝连接。
+
+    设计动机：默认 attach 模式复用已运行的 Origin（快），但会"劫持"用户手动
+    打开的 Origin 窗口；隔离模式宁可拒绝也不碰用户会话，由用户决定关闭 Origin
+    还是切回 attach。返回 None 表示放行，返回 dict 表示结构化拒绝。
+    """
+    if os.environ.get("ORIGIN_SESSION", "attach").lower() != "isolated":
+        return None
+    nproc = _origin_proc_count()
+    if nproc:
+        return oerr.fail(
+            "origin_busy_user_session",
+            f"隔离会话模式（ORIGIN_SESSION=isolated）检测到 {nproc} 个 Origin64 进程"
+            "正在运行，为避免劫持用户手动打开的 Origin，已停止连接。",
+            origin_processes=nproc)
+    return None
+
+
+def _lt_read_float(expr):
+    """读取 LabTalk 数值表达式（项目变量中转，originpro/OriginExt 双通道）。
+
+    只允许在 COM 线程内调用。读不到返回 None（调用方决定 unreadable 语义）。
+    """
+    op = _origin_app
+    if op is None:
+        return None
+    try:
+        op.po.LT_execute(f"double __dshv = {expr};")
+    except Exception:
+        return None
+    try:
+        v = op.lt_float("__dshv")
+        if v is not None:
+            return float(v)
+    except Exception:
+        pass
+    try:
+        v = op.po.LT_get_var("__dshv")
+        if v is not None:
+            return float(v)
+    except Exception:
+        pass
+    return None
+
+
+def _lt_read_str(expr):
+    """读取 LabTalk 字符串表达式（项目变量中转）。读不到返回 None。"""
+    op = _origin_app
+    if op is None:
+        return None
+    try:
+        op.po.LT_execute('__dshvs$ = %s;' % expr)
+    except Exception:
+        return None
+    try:
+        v = op.lt_str("__dshvs$")
+        if v is not None:
+            return str(v)
+    except Exception:
+        pass
+    try:
+        v = op.po.LT_get_str("__dshvs$")
+        if isinstance(v, tuple) and v:
+            v = v[0]
+        if v is not None:
+            return str(v)
+    except Exception:
+        pass
+    return None
+
+
 def _origin_proc_count():
     """统计 Origin64 进程数（>1 说明存在多实例，需清理以免 COM 连错实例）。"""
     try:
@@ -201,6 +332,9 @@ def _origin_proc_count():
 
 def _connect_impl():
     global _connected, _origin_app
+    blocked = _isolated_session_blocked()
+    if blocked is not None:
+        return False, blocked
     if _connected and _origin_app is not None:
         return True, _describe_impl()
     try:
@@ -394,7 +528,7 @@ def _normalize_columns(columns):
 # ---------------------------------------------------------------------------
 def _plot_impl(worksheet, y_columns=None, x_column=None, plot_type="line",
                graph_name=None, title=None, yerr_column=None,
-               style_mode=None, family=None):
+               style_mode=None, family=None, style_overrides=None):
     """画图（支持幂等命名 + 可选样式应用）。返回包含 style 建议。"""
     try:
         ok, conn = _connect_impl()
@@ -441,7 +575,8 @@ def _plot_impl(worksheet, y_columns=None, x_column=None, plot_type="line",
             short_name = gp.obj.GetName()
             style = _apply_style_impl(short_name, plot_type="histogram",
                                       columns=["count"], style_mode=style_mode,
-                                      family=family, x_title="Bin center")
+                                      family=family, x_title="Bin center",
+                                      style_overrides=style_overrides)
             return {
                 "ok": True,
                 "graph": short_name,
@@ -516,7 +651,8 @@ def _plot_impl(worksheet, y_columns=None, x_column=None, plot_type="line",
             pass
         style = _apply_style_impl(short_name, plot_type=plot_type,
                                   columns=plotted, style_mode=style_mode,
-                                  family=family, x_title=x_title)
+                                  family=family, x_title=x_title,
+                                  style_overrides=style_overrides)
         return {
             "ok": True,
             "graph": short_name,
@@ -565,8 +701,11 @@ def _export_impl(graph, file_path=None, fmt="png", width=1200, output_dir=None):
         op = _origin_app
 
         fmt = (fmt or "png").lower().lstrip(".")
-        if fmt not in ("png", "svg"):
-            return {"ok": False, "error": f"fmt 只支持 png/svg，收到 {fmt!r}"}
+        if fmt == "tiff":
+            fmt = "tif"
+        if fmt not in ("png", "svg", "pdf", "tif", "emf"):
+            return {"ok": False,
+                    "error": f"fmt 只支持 png/svg/pdf/tif/emf，收到 {fmt!r}"}
 
         gp = op.find_graph(graph)
         if not gp:
@@ -605,14 +744,16 @@ def _export_impl(graph, file_path=None, fmt="png", width=1200, output_dir=None):
 # ---------------------------------------------------------------------------
 def _plot_file_impl(columns, plot_type="line", fmt="png", file_path=None, width=1200,
                     output_dir=None, x_column=None, y_columns=None, title=None,
-                    graph_name=None, style_mode=None, family=None):
+                    graph_name=None, style_mode=None, family=None,
+                    style_overrides=None):
     try:
         r1 = _write_data_impl(columns)
         if not r1.get("ok"):
             return r1
         r2 = _plot_impl(r1["worksheet"], y_columns=y_columns, x_column=x_column,
                         plot_type=plot_type, title=title, graph_name=graph_name,
-                        style_mode=style_mode, family=family)
+                        style_mode=style_mode, family=family,
+                        style_overrides=style_overrides)
         if not r2.get("ok"):
             return r2
         result = _export_impl(r2["graph"], file_path=file_path, fmt=fmt, width=width,
@@ -1283,8 +1424,13 @@ def _status_impl():
     ok, conn = _connect_impl()
     info = dict(conn)
     info["plot_types"] = PLOT_TYPES
+    info["templates"] = {k: v["desc"] for k, v in PLOT_TEMPLATES.items()}
     info["default_output_dir"] = DEFAULT_OUTPUT_DIR
     info["python"] = sys.executable
+    try:
+        info["capabilities"] = _capabilities_impl()
+    except Exception as e:
+        info["capabilities"] = {"error": f"能力探测失败: {e}"}
     return info
 
 
@@ -1304,11 +1450,18 @@ def _help_impl():
             "graph": "plot 返回的图短名，供 export 使用",
         },
         "tools": {
-            "origin_status": "检查连接（Origin 未启动会自动启动，首连 5~45 秒）",
+            "origin_status": "检查连接 + 版本能力握手（known_risks/features，Origin 未启动会自动启动）",
             "origin_write_data": "写多列数据 -> 返回 worksheet",
-            "origin_plot": "画图（含 histogram/box/bar + yerr_column 误差棒）-> 返回 graph",
-            "origin_export": "导出 PNG/SVG -> 返回 file 绝对路径",
+            "origin_load_file": "导入本地表格文件（CSV/TXT/XLSX/XLS，中文路径/编码安全）-> 返回 worksheet+列画像",
+            "origin_plot": "画图（含 histogram/box/bar + yerr_column 误差棒 + style_overrides 显式样式）-> 返回 graph",
+            "origin_export": "导出 PNG/SVG/PDF/TIF/EMF -> 返回 file 绝对路径",
             "origin_plot_file": "一键 写数+画图+导出 -> 返回 file（最常用）",
+            "origin_plot_plan": "绘图计划（离线秒回）：逐列画像+角色建议+元素清单+待确认问题 -> plan_id",
+            "origin_execute_plan": "按 plan_id 执行计划（写数+画图+导出），不确定列应先经用户确认",
+            "origin_plot_template": "领域模板：stacked_spectra/xrd_pattern/dual_y/forest/multi_panel",
+            "origin_verify_graph": "确定性反读核验（轴标题/字号/图层几何/图例/文件完整性），与 view_graph 互补",
+            "origin_save_project": "保存当前项目为可编辑 OPJU",
+            "origin_export_delivery": "一键交付：源文件同级建 <数据名>_Origin_<时间戳>/ 收纳图片+OPJU 并核验",
             "origin_filter_data": "删点/裁剪（drop_rows 索引 或 x_min/x_max）",
             "origin_fit": "拟合 kind=linear 或 Origin 函数名(ExpDec1/Gauss/Polynomial/...)，拟合曲线上图",
             "origin_plot3d": "3D surface(需 {'z': 2D网格}) / scatter(需 {'x','y','z'})",
@@ -1323,7 +1476,7 @@ def _help_impl():
             "origin_catalog": "动态工具目录（按分类列出全部工具）",
             "origin_read_worksheet": "读取工作表列数据（含列角色/点数）",
             "origin_view_graph": "把图渲染为内联图片，模型可直接看（不落盘）",
-            "origin_apply_style": "对已有图应用排版/调色板/多序列区分（style_mode/family）",
+            "origin_apply_style": "对已有图应用排版/调色板/多序列区分（style_mode/family/style_overrides）",
             "origin_ttest": "t 检验：one/两样本(Welch)/paired",
             "origin_anova": "单因素方差分析（每组一列）",
             "origin_pca": "主成分分析（载荷/解释方差/得分）",
@@ -1342,11 +1495,21 @@ def _help_impl():
             "3D 表面: origin_plot3d({'z': [[..],..]}, plot_type='surface')",
             "等高线: origin_plot_contour({'z': [[..],..]})",
             "删异常点: origin_filter_data(worksheet, x_min=.., x_max=..) 再 plot",
+            "文件导入: origin_load_file(path='D:/data/样品1.csv') -> origin_plot(worksheet,...)",
+            "确认流: origin_plot_plan(columns,...) -> （有 questions 先问用户）-> origin_execute_plan(plan_id)",
+            "多谱线堆叠: origin_plot_template('stacked_spectra', {'x':[..], 'spectra':{...}})",
+            "XRD 三件套: origin_plot_template('xrd_pattern', {'two_theta':[..], 'observed':[..], 'calculated':[..], 'difference':[..]})",
+            "双Y轴: origin_plot_template('dual_y', {'x':[..], 'left':[..], 'right':[..]})",
+            "森林图: origin_plot_template('forest', {'labels':[..], 'effect':[..], 'ci_low':[..], 'ci_high':[..]})",
+            "一键交付: origin_export_delivery(graph, source_path='数据.csv', fmts='png,pdf') -> 图片+OPJU 目录",
         ],
         "tips": [
             "所有工具返回 JSON；ok=false 时读 error_code / recoverable / next_actions 安全分支重试",
             "画图可用 style_mode=default|journal|presentation 与 family=调色板家族 提升排版",
-            "需视觉校验时调用 origin_view_graph（返回内联图片，模型可直接看）",
+            "需视觉校验时调用 origin_view_graph（模型看图）；需程序核验时 origin_verify_graph（对象反读）",
+            "科学边界：不虚构/不补数据；不确定列先问；派生列标注 derived；不静默拟合/平滑/归一化",
+            "style_overrides 显式样式逐项回报 applied/rejected，未验证字段明确拒绝不静默忽略",
+            "origin_status 的 capabilities.known_risks 是版本坑清单（如 plotxy 204/215 在 2026b）",
             "幂等命名：origin_plot 传 graph_name 重复调用会清旧重画，图名稳定",
             "file_path 省略时输出到 ~/dsch_origin_plugin/output（自动命名）",
             "数据 1000 点内秒级完成；不要读 README.md，本速查即完整用法",
@@ -1411,8 +1574,81 @@ def _read_worksheet_impl(worksheet, columns=None, max_rows=None):
         return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
 
 
+def _apply_style_overrides(gl, plots, short_name, overrides):
+    """显式样式覆盖：逐项 applied / kept_default / rejected，绝不静默丢弃。
+
+    支持字段（真机验证可靠）：series_colors / line_width_pt / x_title / y_title；
+    其余字段（legend_*、page_size_cm 等）在真机探针验证写回 API 之前明确拒绝，
+    并说明原因 —— 与"未验证不落图"的项目原则一致。
+    """
+    decisions = []
+    if not overrides:
+        return decisions
+    if not isinstance(overrides, dict):
+        return [{"field": "style_overrides", "decision": "rejected",
+                 "reason": f"必须是 dict，收到 {type(overrides).__name__}"}]
+    for key, val in overrides.items():
+        key = str(key)
+        if val is None:
+            decisions.append({"field": key, "decision": "kept_default",
+                              "reason": "未提供值，保持模板默认"})
+            continue
+        try:
+            if key == "series_colors":
+                if not isinstance(val, (list, tuple)) or not val:
+                    raise ValueError("series_colors 必须是非空颜色列表")
+                hexes = [str(v) for v in val]
+                applied = 0
+                for i, p in enumerate(plots):
+                    if i >= len(hexes):
+                        break
+                    p.color = _hex_to_rgb_tuple(hexes[i])
+                    applied += 1
+                decisions.append({"field": key, "decision": "applied",
+                                  "reason": f"已按顺序应用 {applied} 个序列颜色",
+                                  "values": hexes[:applied]})
+            elif key == "line_width_pt":
+                lw = float(val)
+                if lw <= 0:
+                    raise ValueError("线宽必须为正")
+                ok_attr = None
+                for attr in ("linewidth", "line_width"):
+                    try:
+                        for p in plots:
+                            setattr(p, attr, lw)
+                        ok_attr = attr
+                        break
+                    except Exception:
+                        continue
+                if ok_attr:
+                    decisions.append({"field": key, "decision": "applied",
+                                      "reason": f"经 plot.{ok_attr} 写入 {lw}pt",
+                                      "value": lw})
+                else:
+                    decisions.append({
+                        "field": key, "decision": "rejected",
+                        "reason": "当前 Origin 运行时不支持线宽属性写入，"
+                                  "已拒绝以免错误渲染（可在 OPJU 中手动调整）"})
+            elif key in ("x_title", "y_title"):
+                ax = "x" if key == "x_title" else "y"
+                gl.axis(ax).title = str(val)
+                decisions.append({"field": key, "decision": "applied",
+                                  "reason": f"{ax} 轴标题已写回并可靠落图",
+                                  "value": str(val)})
+            else:
+                decisions.append({
+                    "field": key, "decision": "rejected",
+                    "reason": "该字段的 Origin 写回 API 尚未真机验证，明确拒绝"
+                              "而非静默忽略；当前支持：series_colors / "
+                              "line_width_pt / x_title / y_title"})
+        except Exception as e:
+            decisions.append({"field": key, "decision": "rejected",
+                              "reason": f"应用失败: {e}"})
+    return decisions
+
+
 def _apply_style_impl(graph, plot_type=None, columns=None, style_mode="default",
-                      family=None, x_title=None):
+                      family=None, x_title=None, style_overrides=None):
     """应用默认排版规则：调色板 + 多序列区分 + 语义轴标题（真机验证可靠）。
 
     返回 {ok, applied, applied_ops, style_plan}：每一步都给 reason，方便排查。
@@ -1484,7 +1720,9 @@ def _apply_style_impl(graph, plot_type=None, columns=None, style_mode="default",
                 pass
 
         style_plan["applied"] = applied_ops
-        return oerr.ok(applied=True, applied_ops=applied_ops, style_plan=style_plan)
+        style_decisions = _apply_style_overrides(gl, plots, graph, style_overrides)
+        return oerr.ok(applied=True, applied_ops=applied_ops, style_plan=style_plan,
+                       style_decisions=style_decisions)
     except Exception as e:
         return oerr.fail("origin_operation_error", str(e),
                          trace=traceback.format_exc(limit=3))
@@ -1704,6 +1942,649 @@ def _error_codes_impl():
 
 
 # ---------------------------------------------------------------------------
+# 文件导入（P0）：本地表格 -> Origin 工作表
+# ---------------------------------------------------------------------------
+def _load_file_impl(path, worksheet=None, sheet=None, max_preview_rows=5):
+    try:
+        import origin_fileio as fio
+        r = fio.read_table(path, sheet=sheet)
+        if not r.get("ok"):
+            return r
+        w = _write_data_impl(r["columns"], worksheet=worksheet)
+        if not w.get("ok"):
+            return w
+        n_preview = max(0, int(max_preview_rows or 0))
+        return oerr.ok(
+            worksheet=w["worksheet"], columns=w["columns"], rows=w["rows"],
+            source=r["path"], file_type=r.get("file_type"),
+            encoding=r.get("encoding"), sheet=r.get("sheet"),
+            column_types=r.get("column_types"),
+            preview_rows=(r.get("preview_rows") or [])[:n_preview],
+            file_n_rows=r.get("n_rows"), warning=r.get("warning"),
+            detail=(f"已从 {os.path.basename(str(r['path']))} 导入 "
+                    f"{w['columns'].__len__()} 列 x {w['rows']} 行 -> {w['worksheet']}；"
+                    "可用 origin_plot / origin_plot_file 继续画图，"
+                    "或 origin_plot_plan 生成确认计划"))
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+# ---------------------------------------------------------------------------
+# OPJU 项目保存 + 交付目录（P0）：可编辑工程是一等交付物
+# ---------------------------------------------------------------------------
+def _save_project_impl(path):
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        if not path:
+            return oerr.fail("invalid_request", "path 不能为空")
+        path = os.path.abspath(str(path))
+        if not path.lower().endswith((".opju", ".ogg", ".opj")):
+            path += ".opju"
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        saved_ok = False
+        try:
+            saved_ok = bool(op.save(path))     # originpro 官方 API：另存当前项目
+        except Exception:
+            saved_ok = False
+        if not saved_ok or not os.path.exists(path):
+            # 兜底 1：先存 ASCII 临时路径再搬运（绕开 COM/LabTalk 的中文路径差异）
+            try:
+                import shutil
+                import tempfile as _tf
+                tmp = os.path.join(_tf.mkdtemp(prefix="dsh_opju_"), "proj.opju")
+                if op.save(tmp) and os.path.exists(tmp):
+                    shutil.move(tmp, path)
+                    saved_ok = os.path.exists(path)
+            except Exception:
+                saved_ok = False
+        if not saved_ok or not os.path.exists(path):
+            # 兜底 2：LabTalk save（正斜杠路径）
+            try:
+                op.po.LT_execute('save "%s";' % path.replace("\\", "/"))
+                saved_ok = os.path.exists(path)
+            except Exception:
+                saved_ok = False
+        if not saved_ok or not os.path.exists(path):
+            return oerr.fail("export_error",
+                             "OPJU 保存失败（op.save / 临时搬运 / LabTalk save 均未落盘）",
+                             path=path)
+        return oerr.ok(file=path, size=os.path.getsize(path),
+                       detail=(f"项目已保存 -> {path}"
+                               "（保存的是当前项目全部页面，可在 Origin 中继续编辑）"))
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+def _export_delivery_impl(graph, source_path=None, output_dir=None, fmts="png,pdf",
+                          width=1200, save_opju=True):
+    """一键交付：源文件同级建 <数据名>_Origin_<时间戳>/ 目录，
+    导出多格式图片 + OPJU，并逐文件核验完整性。"""
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        fmt_list = [f.strip().lower().lstrip(".") for f in str(fmts).split(",")
+                    if f.strip()]
+        fmt_list = ["tif" if f == "tiff" else f for f in fmt_list]
+        bad = [f for f in fmt_list if f not in ("png", "svg", "pdf", "tif", "emf")]
+        if bad:
+            return oerr.fail("invalid_request", f"不支持的导出格式: {bad}",
+                             supported=["png", "svg", "pdf", "tif", "emf"])
+        gp = op_find_graph(graph)
+        if not gp:
+            return oerr.fail("graph_not_found", f"图不存在: {graph}", graph=str(graph))
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        if source_path:
+            src = os.path.abspath(str(source_path))
+            stem = re.sub(r"[^\w\-.]", "_",
+                          os.path.splitext(os.path.basename(src))[0])
+            ddir = os.path.join(os.path.dirname(src), f"{stem}_Origin_{ts}")
+        elif output_dir:
+            ddir = os.path.abspath(str(output_dir))
+        else:
+            ddir = os.path.join(DEFAULT_OUTPUT_DIR, f"delivery_{ts}")
+        os.makedirs(ddir, exist_ok=True)
+        safe_g = re.sub(r"[^\w\-.]", "_", str(graph))
+        files, issues = [], []
+        for fmt in fmt_list:
+            r = _export_impl(graph, file_path=os.path.join(ddir, f"{safe_g}.{fmt}"),
+                             fmt=fmt, width=width)
+            if r.get("ok"):
+                entry = {"format": fmt, "file": r["file"], "size": r["size"],
+                         "ok": True}
+                if not os.path.exists(r["file"]) or r["size"] == 0:
+                    entry["ok"] = False
+                    issues.append(f"{fmt} 文件为空: {r['file']}")
+            else:
+                entry = {"format": fmt, "ok": False, "error": r.get("error")}
+                issues.append(f"{fmt} 导出失败: {r.get('error')}")
+            files.append(entry)
+        opju = None
+        if save_opju:
+            r2 = _save_project_impl(os.path.join(ddir, f"{safe_g}_{ts}.opju"))
+            if r2.get("ok"):
+                opju = r2["file"]
+            else:
+                issues.append(f"OPJU 保存失败: {r2.get('error')}")
+        n_ok = sum(1 for f in files if f.get("ok"))
+        return oerr.ok(
+            delivery_dir=ddir, files=files, opju=opju, issues=issues,
+            all_ok=(not issues),
+            detail=(f"交付目录 {ddir}（图片 {n_ok}/{len(files)} + "
+                    f"{'OPJU' if opju else '无 OPJU'}）"
+                    + ("；存在问题：" + "; ".join(issues) if issues else "")))
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+def op_find_graph(graph):
+    """COM 线程内的图页查找（供交付/验证路径复用）。"""
+    try:
+        return _origin_app.find_graph(graph)
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# 确定性反读验证（P0）：与 origin_view_graph 组成"程序核 + 模型看"双保险
+# ---------------------------------------------------------------------------
+def _verify_graph_impl(graph=None, expected_x_title=None, expected_y_title=None,
+                       min_font_pt=None, expected_series=None,
+                       legend_visible=None, files=None):
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        target = graph or _active_graph_shortname()
+        if not target:
+            return oerr.fail("graph_not_found", "未指定图名且没有活动图页")
+        expected = {}
+        if expected_x_title:
+            expected["x_title"] = str(expected_x_title)
+        if expected_y_title:
+            expected["y_title"] = str(expected_y_title)
+        if min_font_pt is not None:
+            expected["min_font_pt"] = float(min_font_pt)
+        if expected_series is not None:
+            expected["series"] = int(expected_series)
+        if legend_visible is not None:
+            expected["legend_visible"] = bool(legend_visible)
+        import origin_verify as ovf
+        return ovf.verify_graph(op, op.po, target, expected=expected,
+                                files=files)
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+# ---------------------------------------------------------------------------
+# 领域模板（P1）：全部用真机验证过的原语组合（行号X/NaN断线/2点线/模板图型）
+# ---------------------------------------------------------------------------
+def _validate_template_data(template_id, data):
+    """参数校验（在连接 Origin 之前调用，离线可测）。返回 (True, None) 或 (None, err)。"""
+    if template_id not in PLOT_TEMPLATES:
+        return None, oerr.fail("invalid_request", f"未知 template_id: {template_id!r}",
+                               valid_templates=sorted(PLOT_TEMPLATES))
+    if not isinstance(data, dict):
+        return None, oerr.fail("invalid_request", "data 必须是 dict",
+                               template=template_id, received_type=type(data).__name__)
+    t = template_id
+
+    def need_list(key):
+        v = data.get(key)
+        return isinstance(v, (list, tuple)) and len(v) > 0
+
+    if t == "stacked_spectra":
+        if not need_list("x") or not isinstance(data.get("spectra"), dict) \
+                or not data.get("spectra"):
+            return None, oerr.fail(
+                "invalid_request",
+                "stacked_spectra 需要 data={'x': [..], 'spectra': {'谱线名': [..], ...}}",
+                template=t, received_keys=sorted(data))
+        nx = len(data["x"])
+        for k, v in data["spectra"].items():
+            if not isinstance(v, (list, tuple)) or len(v) != nx:
+                got = len(v) if isinstance(v, (list, tuple)) else type(v).__name__
+                return None, oerr.fail(
+                    "invalid_request",
+                    f"谱线 {k!r} 长度必须与 x 一致（x={nx}，收到 {got}）",
+                    template=t, spectrum=str(k))
+    elif t == "xrd_pattern":
+        for k in ("two_theta", "observed", "calculated"):
+            if not need_list(k):
+                return None, oerr.fail(
+                    "invalid_request", f"xrd_pattern 需要 data['{k}'] 为非空列表",
+                    template=t, received_keys=sorted(data))
+        n = len(data["two_theta"])
+        for k in ("observed", "calculated", "difference"):
+            if k in data and len(data[k]) != n:
+                return None, oerr.fail(
+                    "invalid_request", f"{k} 长度必须与 two_theta 一致", template=t)
+        ph = data.get("phases")
+        if ph is not None and not (isinstance(ph, dict) and all(
+                isinstance(v, (list, tuple)) for v in ph.values())):
+            return None, oerr.fail(
+                "invalid_request", "phases 必须是 {'相名': [2θ位置...]}",
+                template=t)
+    elif t == "dual_y":
+        for k in ("x", "left", "right"):
+            if not need_list(k):
+                return None, oerr.fail("invalid_request",
+                                       f"dual_y 需要 data['{k}'] 为非空列表",
+                                       template=t, received_keys=sorted(data))
+        n = len(data["x"])
+        for k in ("left", "right"):
+            if len(data[k]) != n:
+                return None, oerr.fail("invalid_request",
+                                       f"{k} 与 x 长度不一致", template=t)
+    elif t == "forest":
+        for k in ("labels", "effect", "ci_low", "ci_high"):
+            if not need_list(k):
+                return None, oerr.fail("invalid_request",
+                                       f"forest 需要 data['{k}'] 为非空列表",
+                                       template=t, received_keys=sorted(data))
+        n = len(data["labels"])
+        for k in ("effect", "ci_low", "ci_high"):
+            if len(data[k]) != n:
+                return None, oerr.fail("invalid_request",
+                                       f"{k} 与 labels 长度不一致", template=t)
+    elif t == "multi_panel":
+        if not isinstance(data.get("panels"), dict) or not data.get("panels"):
+            return None, oerr.fail(
+                "invalid_request",
+                "multi_panel 需要 data={'x': [..] 可选, 'panels': {'面板名': [..], ...}}",
+                template=t, received_keys=sorted(data))
+    return True, None
+
+
+def _plot_template_impl(template_id, data, graph_name=None, title=None,
+                        style_mode="default", family=None, offset="auto",
+                        reverse_x=False, fmt=None, file_path=None, width=1200):
+    try:
+        import numpy as np
+        # 参数校验前置：离线可测，校验失败绝不拉起 Origin
+        okv, errv = _validate_template_data(template_id, data)
+        if not okv:
+            return errv
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        t = template_id
+
+        def _flist(vals):
+            return [float(v) if v is not None else float("nan") for v in vals]
+
+        if t == "stacked_spectra":
+            x = _flist(data["x"])
+            spectra = {str(k): _flist(v) for k, v in data["spectra"].items()}
+            if reverse_x:
+                x = x[::-1]
+                spectra = {k: v[::-1] for k, v in spectra.items()}
+            names = list(spectra)
+            if str(offset).lower() == "auto":
+                spans = []
+                for v in spectra.values():
+                    arr = np.asarray([b for b in v if np.isfinite(b)])
+                    if arr.size:
+                        spans.append(float(arr.max() - arr.min()))
+                step = 1.2 * (max(spans) if spans else 1.0)
+            else:
+                step = float(offset)
+            cols = {"x": x}
+            offsets = {}
+            for i, nm in enumerate(names):
+                offsets[nm] = round(i * step, 6)
+                cols[nm] = [b + i * step for b in spectra[nm]]
+            w = _write_data_impl(cols)
+            if not w.get("ok"):
+                return w
+            wsobj = op.find_sheet("w", w["worksheet"])
+            lname = _ensure_graph_name(graph_name, title or "StackedSpectra")
+            gp = op.new_graph(lname=lname)
+            gl = gp[0]
+            for i in range(1, len(cols)):
+                gl.add_plot(wsobj, i, 0, type="l")
+            gl.rescale()
+            short = gp.obj.GetName()
+            style = _apply_style_impl(short, plot_type="line", columns=names,
+                                      style_mode=style_mode, family=family)
+            try:
+                gl.axis("y").title = "Intensity (a.u.)"
+            except Exception:
+                pass
+            r = oerr.ok(graph=short, template=t, series=names,
+                        offsets=offsets, step=step, style=style,
+                        detail=(f"stacked_spectra 完成：{len(names)} 条谱线"
+                                f"（间距 {step:.4g}）-> {short}"))
+        elif t == "xrd_pattern":
+            x = _flist(data["two_theta"])
+            obs = _flist(data["observed"])
+            calc = _flist(data["calculated"])
+            diff = _flist(data["difference"]) if "difference" in data else None
+            allv = np.asarray([v for v in (obs + calc) if np.isfinite(v)])
+            top = float(allv.max()) if allv.size else 1.0
+            bottom = float(allv.min()) if allv.size else 0.0
+            span = max(top - bottom, 1e-9)
+            base_pos = bottom - 0.12 * span
+            cols = {"two_theta": x, "Observed": obs, "Calculated": calc}
+            if diff is not None:
+                cols["Difference"] = [d + base_pos for d in diff]
+            w = _write_data_impl(cols)
+            if not w.get("ok"):
+                return w
+            wsobj = op.find_sheet("w", w["worksheet"])
+            lname = _ensure_graph_name(graph_name, title or "XRD")
+            gp = op.new_graph(lname=lname)
+            gl = gp[0]
+            gl.add_plot(wsobj, 1, 0, type="s")   # Observed 散点
+            gl.add_plot(wsobj, 2, 0, type="l")   # Calculated 线
+            if diff is not None:
+                gl.add_plot(wsobj, 3, 0, type="l")  # Difference 下移线
+            phase_sheets = []
+            for ph_name, positions in (data.get("phases") or {}).items():
+                seg_x, seg_y = [], []
+                for p in positions:
+                    try:
+                        pv = float(p)
+                    except (TypeError, ValueError):
+                        continue
+                    seg_x += [pv, pv, float("nan")]
+                    seg_y += [base_pos - 0.04 * span, base_pos, float("nan")]
+                if not seg_x:
+                    continue
+                pws = op.new_sheet("w", _new_unique_name("Phase"))
+                pws.from_list(0, seg_x, lname=f"{ph_name}_x")
+                pws.from_list(1, seg_y, lname=f"{ph_name}_y")
+                gl.add_plot(pws, 1, 0, type="l")
+                phase_sheets.append(str(ph_name))
+            gl.rescale()
+            short = gp.obj.GetName()
+            style = _apply_style_impl(short, plot_type="line",
+                                      columns=["Observed", "Calculated"],
+                                      style_mode=style_mode, family=family,
+                                      x_title="2θ (degrees)")
+            try:
+                gl.axis("y").title = "Intensity (a.u.)"
+            except Exception:
+                pass
+            r = oerr.ok(graph=short, template=t, phases=phase_sheets,
+                        style=style,
+                        detail=(f"xrd_pattern 完成：Observed 散点 + Calculated 线"
+                                f"{' + Difference 下移线' if diff is not None else ''}"
+                                f"{' + ' + str(len(phase_sheets)) + ' 组相刻线' if phase_sheets else ''}"
+                                f" -> {short}"))
+        elif t == "dual_y":
+            x = _flist(data["x"])
+            left = _flist(data["left"])
+            right = _flist(data["right"])
+            left_name = str(data.get("left_name") or "Left")
+            right_name = str(data.get("right_name") or "Right")
+            lname = _ensure_graph_name(graph_name, title or "DualY")
+            # 双 Y 模板名因版本而异（2026 实测 doubley/righty 可用，dualy 不存在）：
+            # 逐个探测，全部失败则退回"普通图 + add_layer"并明确告知右轴需手动调整
+            gp, used_template = None, None
+            for tname in ("dualy", "doubley", "righty"):
+                try:
+                    gpx = op.new_graph(lname=lname, template=tname)
+                except Exception:
+                    gpx = None
+                if gpx is not None:
+                    gp, used_template = gpx, tname
+                    break
+            if gp is None:
+                try:
+                    gp = op.new_graph(lname=lname)
+                    gp.add_layer()
+                except Exception:
+                    gp = None
+            if gp is None:
+                return oerr.fail(
+                    "template_unavailable",
+                    "双 Y 模板（dualy/doubley/righty）均不可用且 add_layer 失败",
+                    workaround="改用 origin_plot 双序列，或 origin_plot_template="
+                               "'stacked_spectra'")
+            short = gp.obj.GetName()
+            try:
+                op.po.LT_execute(f"win -a {short};")
+            except Exception:
+                pass
+            nlay = _lt_read_float("page.nlayers")
+            if not nlay or nlay < 2:
+                return oerr.fail(
+                    "template_unavailable",
+                    "双 Y 模板未能创建双图层", template_used=used_template,
+                    workaround="改用 origin_plot 双序列，或 stacked_spectra")
+            w = _write_data_impl({"x": x, left_name: left, right_name: right})
+            if not w.get("ok"):
+                return w
+            wsobj = op.find_sheet("w", w["worksheet"])
+            gl1, gl2 = gp[0], gp[1]
+            gl1.add_plot(wsobj, 1, 0, type="l")
+            gl1.rescale()
+            gl2.add_plot(wsobj, 2, 0, type="l")
+            gl2.rescale()
+            try:
+                gl1.axis("y").title = left_name
+            except Exception:
+                pass
+            try:
+                gl2.axis("y").title = right_name
+            except Exception:
+                pass
+            style = _apply_style_impl(short, plot_type="line",
+                                      columns=[left_name, right_name],
+                                      style_mode=style_mode, family=family)
+            note = (f"模板 {used_template}" if used_template
+                    else "普通双图层（右轴位置可能需在 OPJU 中手动调整）")
+            r = oerr.ok(graph=short, template=t, template_used=used_template,
+                        left_axis=left_name, right_axis=right_name, style=style,
+                        detail=f"dual_y 完成：左轴 {left_name} / 右轴 {right_name}"
+                               f"（{note}；排版仅作用于第一层）-> {short}")
+        elif t == "forest":
+            labels = [str(v) for v in data["labels"]]
+            effect = _flist(data["effect"])
+            lo = _flist(data["ci_low"])
+            hi = _flist(data["ci_high"])
+            n = len(labels)
+            try:
+                zero = float(data.get("zero", 0))
+            except (TypeError, ValueError):
+                zero = 0.0
+            ws = op.new_sheet("w", _new_unique_name("ForestPt"))
+            ws.from_list(0, [float(i + 1) for i in range(n)], lname="study_index")
+            ws.from_list(1, effect, lname="effect")
+            try:
+                ws.from_list(2, labels, lname="label")
+            except Exception:
+                pass
+            ci_x, ci_y = [], []
+            for i in range(n):
+                ci_x += [lo[i], hi[i], float("nan")]
+                ci_y += [i + 1.0, i + 1.0, float("nan")]
+            ws_ci = op.new_sheet("w", _new_unique_name("ForestCI"))
+            ws_ci.from_list(0, ci_x, lname="ci_x")
+            ws_ci.from_list(1, ci_y, lname="study_index")
+            ws_z = op.new_sheet("w", _new_unique_name("ForestZero"))
+            ws_z.from_list(0, [zero, zero], lname="zero_x")
+            ws_z.from_list(1, [0.5, float(n) + 0.5], lname="zero_y")
+            lname = _ensure_graph_name(graph_name, title or "Forest")
+            gp = op.new_graph(lname=lname)
+            gl = gp[0]
+            gl.add_plot(ws_z, 1, 0, type="l")    # 零参考线
+            gl.add_plot(ws_ci, 1, 0, type="l")   # 置信区间横线（NaN 断段）
+            gl.add_plot(ws, 0, 1, type="s")      # 效应量点（y=序号, x=效应量）
+            gl.rescale()
+            short = gp.obj.GetName()
+            style = _apply_style_impl(short, plot_type="scatter",
+                                      columns=labels, style_mode=style_mode,
+                                      family=family, x_title="Effect size")
+            r = oerr.ok(graph=short, template=t, labels=labels, zero=zero,
+                        style=style,
+                        detail=f"forest 完成：{n} 项研究（点+CI 线+零参考线），"
+                               f"研究标签见返回 labels 与工作表 -> {short}")
+        elif t == "multi_panel":
+            panels = {str(k): _flist(v) for k, v in data["panels"].items()}
+            names = list(panels)
+            has_x = "x" in data and isinstance(data["x"], (list, tuple)) and data["x"]
+            cols = {}
+            col_of = {}
+            if has_x:
+                cols["x"] = _flist(data["x"])
+            else:
+                nx = max(len(v) for v in panels.values())
+                cols["index"] = [float(i + 1) for i in range(nx)]
+            for nm in names:
+                col_of[nm] = len(cols)
+                cols[nm] = panels[nm]
+            w = _write_data_impl(cols)
+            if not w.get("ok"):
+                return w
+            wsobj = op.find_sheet("w", w["worksheet"])
+            lname = _ensure_graph_name(graph_name, title or "MultiPanel")
+            gp = op.new_graph(lname=lname)
+            layers = [gp[0]]
+            for _ in range(1, len(names)):
+                try:
+                    layers.append(gp.add_layer())
+                except Exception:
+                    break
+            drawn = min(len(layers), len(names))
+            for i in range(drawn):
+                gli = layers[i]
+                nm = names[i]
+                gli.add_plot(wsobj, col_of[nm], 0, type="l")
+                gli.rescale()
+                try:
+                    gli.axis("y").title = nm
+                except Exception:
+                    pass
+            short = gp.obj.GetName()
+            if drawn < len(names):
+                return oerr.fail(
+                    "template_unavailable",
+                    f"multi_panel 仅创建了 {drawn}/{len(names)} 个图层面板"
+                    "（本环境 GLPage.add_layer 不可用）",
+                    graph=short, drawn=drawn, worksheet=w["worksheet"],
+                    workaround="分多次调用 origin_plot（每面板一张图），"
+                               "或改用 stacked_spectra")
+            style = _apply_style_impl(short, plot_type="line", columns=names,
+                                      style_mode=style_mode, family=family)
+            r = oerr.ok(graph=short, template=t, panels=names, style=style,
+                        detail=f"multi_panel 完成：{drawn} 个面板 -> {short}")
+        else:  # 防御分支（理论上已被 _validate_template_data 拦截）
+            return oerr.fail("invalid_request", f"未知 template_id: {template_id!r}")
+
+        if fmt or file_path:
+            rex = _export_impl(r["graph"], file_path=file_path, fmt=fmt or "png",
+                               width=width)
+            if rex.get("ok"):
+                r["file"] = rex["file"]
+                r["size"] = rex["size"]
+                r["format"] = rex["format"]
+            else:
+                r["warning"] = f"导出失败: {rex.get('error')}"
+        return r
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+# ---------------------------------------------------------------------------
+# 计划执行（P1）：origin_plot_plan 缓存的计划 -> 写数/画图/导出
+# ---------------------------------------------------------------------------
+def _execute_plan_impl(plan_id, fmt=None, file_path=None, graph_name=None,
+                       width=1200):
+    try:
+        import origin_plan as oplan
+        plan = oplan.get_plan(plan_id)
+        if plan is None:
+            return oerr.fail("plan_not_found",
+                             f"plan_id 不存在或已过期（服务端缓存容量 "
+                             f"{oplan.PLAN_CACHE_MAX}，重启后清空）",
+                             hint="重新调用 origin_plot_plan 生成")
+        p = plan["params"]
+        roles = plan["roles"]
+        columns = dict(plan["data"]["columns"])
+        x_col = roles.get("x")
+        if x_col is None:
+            # 无单调 X 候选：生成行号列作 X（计划流已向用户提示）
+            n = plan["data"]["n_rows"]
+            columns = {"row_index": [float(i + 1) for i in range(n)], **columns}
+            x_col = "row_index"
+        r1 = _write_data_impl(columns)
+        if not r1.get("ok"):
+            return r1
+        r2 = _plot_impl(r1["worksheet"], y_columns=roles.get("y"),
+                        x_column=x_col, plot_type=p.get("plot_type") or "line",
+                        yerr_column=roles.get("yerr"),
+                        graph_name=graph_name or p.get("graph_name"),
+                        title=p.get("title"),
+                        style_mode=p.get("style_mode") or "default",
+                        family=p.get("family"))
+        if not r2.get("ok"):
+            return r2
+        r3 = _export_impl(r2["graph"], file_path=file_path or p.get("file_path"),
+                          fmt=fmt or p.get("fmt") or "png", width=width)
+        if r3.get("ok"):
+            r3["worksheet"] = r1.get("worksheet")
+            r3["graph"] = r2.get("graph")
+            r3["plan_id"] = plan["plan_id"]
+            r3["style"] = r2.get("style")
+        if plan.get("questions"):
+            r3["confirmation_reminder"] = (
+                "该计划存在待确认项，执行前应已获得用户确认："
+                + json.dumps(plan["questions"], ensure_ascii=False))
+        return r3
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+# ---------------------------------------------------------------------------
+# 版本能力握手（P1）：origin_status 暴露版本/已知坑/特性可用性
+# ---------------------------------------------------------------------------
+def _origin_version_label(v):
+    if v is None:
+        return "unknown"
+    for k, name in _ORIGIN_VERSION_LABELS.items():
+        if abs(v - k) < 0.01:
+            return f"{name} (@V={v:g})"
+    if v >= 10.3:
+        return f"Origin 2026 系列 (@V={v:g})"
+    if v >= 10.0:
+        return f"Origin 2022-2025 系列 (@V={v:g})"
+    if v >= 9.5:
+        return f"Origin 2021 系列 (@V={v:g})"
+    return f"Origin legacy (@V={v:g})"
+
+
+def _capabilities_impl():
+    """版本能力表（只读探测，绝不阻塞状态查询）。"""
+    feats = {
+        "plot_basic_types": True,
+        "plot_histogram_box_bar": True,
+        "plotxy_type_204_215": False,
+        "templates": sorted(PLOT_TEMPLATES),
+        "xlsx_via_openpyxl": None,
+    }
+    try:
+        import openpyxl  # noqa: F401
+        feats["xlsx_via_openpyxl"] = True
+    except Exception:
+        feats["xlsx_via_openpyxl"] = False
+    ver = _lt_read_float("@V")
+    return {
+        "origin_version_raw": ver,
+        "origin_version_label": _origin_version_label(ver),
+        "known_risks": CAPABILITY_KNOWN_RISKS,
+        "features": feats,
+        "session_mode": os.environ.get("ORIGIN_SESSION", "attach"),
+    }
+
+
+# ---------------------------------------------------------------------------
 # 公开 API（线程安全：自动投递到专用 COM 线程）
 # ---------------------------------------------------------------------------
 @_synchronized
@@ -1730,10 +2611,11 @@ def write_data(columns, worksheet=None, book_name=None, sheet_name=None):
 @_synchronized
 def plot(worksheet, y_columns=None, x_column=None, plot_type="line",
          graph_name=None, title=None, yerr_column=None,
-         style_mode="default", family=None):
+         style_mode="default", family=None, style_overrides=None):
     return _plot_impl(worksheet, y_columns=y_columns, x_column=x_column,
                       plot_type=plot_type, graph_name=graph_name, title=title,
-                      yerr_column=yerr_column, style_mode=style_mode, family=family)
+                      yerr_column=yerr_column, style_mode=style_mode, family=family,
+                      style_overrides=style_overrides)
 
 
 @_synchronized
@@ -1745,11 +2627,13 @@ def export(graph, file_path=None, fmt="png", width=1200, output_dir=None):
 @_synchronized
 def plot_file(columns, plot_type="line", fmt="png", file_path=None, width=1200,
               output_dir=None, x_column=None, y_columns=None, title=None,
-              graph_name=None, style_mode="default", family=None):
+              graph_name=None, style_mode="default", family=None,
+              style_overrides=None):
     return _plot_file_impl(columns, plot_type=plot_type, fmt=fmt, file_path=file_path,
                            width=width, output_dir=output_dir, x_column=x_column,
                            y_columns=y_columns, title=title, graph_name=graph_name,
-                           style_mode=style_mode, family=family)
+                           style_mode=style_mode, family=family,
+                           style_overrides=style_overrides)
 
 
 @_synchronized
@@ -1835,9 +2719,10 @@ def read_worksheet(worksheet, columns=None, max_rows=None):
 
 @_synchronized
 def apply_style(graph, plot_type=None, columns=None, style_mode="default",
-                family=None, x_title=None):
+                family=None, x_title=None, style_overrides=None):
     return _apply_style_impl(graph, plot_type=plot_type, columns=columns,
-                             style_mode=style_mode, family=family, x_title=x_title)
+                             style_mode=style_mode, family=family, x_title=x_title,
+                             style_overrides=style_overrides)
 
 
 @_synchronized
@@ -1876,3 +2761,49 @@ def list_graphs():
 @_synchronized
 def error_codes():
     return _error_codes_impl()
+
+
+@_synchronized
+def load_file(path, worksheet=None, sheet=None, max_preview_rows=5):
+    return _load_file_impl(path, worksheet=worksheet, sheet=sheet,
+                           max_preview_rows=max_preview_rows)
+
+
+@_synchronized
+def save_project(path):
+    return _save_project_impl(path)
+
+
+@_synchronized
+def export_delivery(graph, source_path=None, output_dir=None, fmts="png,pdf",
+                    width=1200, save_opju=True):
+    return _export_delivery_impl(graph, source_path=source_path,
+                                 output_dir=output_dir, fmts=fmts, width=width,
+                                 save_opju=save_opju)
+
+
+@_synchronized
+def verify_graph(graph=None, expected_x_title=None, expected_y_title=None,
+                 min_font_pt=None, expected_series=None, legend_visible=None,
+                 files=None):
+    return _verify_graph_impl(graph=graph, expected_x_title=expected_x_title,
+                              expected_y_title=expected_y_title,
+                              min_font_pt=min_font_pt,
+                              expected_series=expected_series,
+                              legend_visible=legend_visible, files=files)
+
+
+@_synchronized
+def plot_template(template_id, data, graph_name=None, title=None,
+                  style_mode="default", family=None, offset="auto",
+                  reverse_x=False, fmt=None, file_path=None, width=1200):
+    return _plot_template_impl(template_id, data, graph_name=graph_name,
+                               title=title, style_mode=style_mode, family=family,
+                               offset=offset, reverse_x=reverse_x, fmt=fmt,
+                               file_path=file_path, width=width)
+
+
+@_synchronized
+def execute_plan(plan_id, fmt=None, file_path=None, graph_name=None, width=1200):
+    return _execute_plan_impl(plan_id, fmt=fmt, file_path=file_path,
+                              graph_name=graph_name, width=width)

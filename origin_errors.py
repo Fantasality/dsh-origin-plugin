@@ -84,6 +84,35 @@ CODE_META: Dict[str, tuple] = {
         True,
         ["核对列角色参数（X/Y/Z/忽略）取值", "参考 origin_read_worksheet 的列信息"],
     ),
+    "origin_busy_user_session": (
+        True,
+        ["关闭当前 Origin 窗口后重试（isolated 模式不劫持已打开的 Origin）",
+         "或在启动器环境改回 ORIGIN_SESSION=attach（默认）以复用已开实例"],
+    ),
+    "file_unsupported_format": (
+        True,
+        ["改用 CSV/TXT/XLSX 格式", "旧版 .xls 请先在 Excel/Origin 中另存为 XLSX"],
+    ),
+    "file_read_error": (
+        True,
+        ["确认文件存在且未损坏、未被其他程序锁定",
+         "XLSX 需要 openpyxl：在插件 venv 中 pip install openpyxl 后重试"],
+    ),
+    "plan_not_found": (
+        True,
+        ["plan_id 已失效（服务器重启或缓存淘汰），重新调用 origin_plot_plan 生成",
+         "确认 plan_id 来自本次会话的 origin_plot_plan 返回值"],
+    ),
+    "template_unavailable": (
+        True,
+        ["查看 detail 中缺失的模板/图层能力说明",
+         "改用基础 origin_plot 或其他 template_id（见 origin_status 的 features.templates）"],
+    ),
+    "delivery_error": (
+        True,
+        ["确认目标目录可写（OneDrive/网盘同步目录可能锁定文件）",
+         "换一个 output_dir 后重试"],
+    ),
 }
 
 VALID_CODES = frozenset(CODE_META)

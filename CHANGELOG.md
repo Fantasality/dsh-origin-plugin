@@ -1,6 +1,62 @@
 # Changelog
 
 
+## 2.1.0 (2026-09-15)
+
+工具 28 → **35 个**。补齐「可信交付」短板：文件导入、可编辑 OPJU 交付、
+确定性反读验证、绘图计划确认流、领域模板、版本能力握手（真机 Origin 2026 +
+venv Python 3.13 全量自测通过：offline-test / selftest / Node SDK 握手三绿）。
+
+### P0 · 文件与交付
+- **`origin_load_file`**：导入 CSV/TXT/TSV/DAT/XLSX/XLSM/XLS —— 中文路径/列名
+  安全，编码自动探测（utf-8-sig/gbk/utf-16），分隔符自动嗅探（含空白分隔），
+  表头自动识别，逐列类型标注 numeric/text/mixed + 预览（新增 `origin_fileio.py`，
+  XLSX 走 openpyxl，requirements 已加）；
+- **`origin_save_project`**：保存当前项目为可编辑 OPJU（`op.save` + ASCII 临时
+  搬运 + LabTalk 三重兜底）；
+- **`origin_export_delivery`**：一键交付 —— 源文件同级建 `<数据名>_Origin_<时间戳>/`
+  收纳多格式图片 + OPJU，逐文件核验完整性；
+- **`origin_verify_graph`**（新增 `origin_verify.py`）：确定性反读 —— 图层/曲线数、
+  轴标题文本与字号（xb/yl.fsize）、图层几何、图例状态、交付文件完整性，
+  逐项 pass/fail/warn/unreadable，与 `origin_view_graph` 组成"程序核+模型看"双保险；
+- `origin_export` 格式扩展：png/svg 之外支持 **pdf/tif/emf**；
+- SKILL.md 新增科学边界条款：不虚构/不补数据、不确定列先问、派生列标注
+  derived、不静默拟合/平滑/归一化。
+
+### P1 · 模板与计划流
+- **`origin_plot_template`**（5 条领域模板，全部由真机验证过的原语组合）：
+  `stacked_spectra`（多谱线纵向堆叠偏移，offset/reverse_x）、`xrd_pattern`
+  （Observed 散点+Calculated 线+Difference 下移+phases 相刻线）、`dual_y`
+  （双 Y 轴，模板名按 dualy/doubley/righty 探测——2026 实测 DUALY 不存在）、
+  `forest`（效应量+CI+零参考线，NaN 断线法）、`multi_panel`（多面板纵向堆叠）；
+- **`origin_plot_plan` / `origin_execute_plan`**（新增 `origin_plan.py`）：离线
+  秒回的绘图计划 —— 逐列画像（dtype/缺失/单调性）、角色建议（X/Y/误差棒/标签）、
+  元素清单（排版+调色板+使用约束+轴标题）、待确认问题（混合列/高缺失/多个X
+  候选/无单调X）；plan_id 内容哈希 + 服务端 LRU 缓存（32），执行零回传；
+- **版本能力握手**：`origin_status` 新增 `capabilities` —— Origin 版本标签
+  （LabTalk @V）、**已知坑矩阵 known_risks**（plotxy 204/215 @2026b、多实例
+  COM 冲突、线程亲和性、模态对话框挂起、双Y模板名差异——全部真机探针结论
+  数据化）、features 特性表。
+
+### P2 · 治理与体验
+- **隔离会话守卫**：`ORIGIN_SESSION=isolated` 时检测到已运行 Origin 即返回
+  `origin_busy_user_session`（不劫持用户窗口），默认 attach 不变；
+- **`style_overrides` 显式样式**：series_colors/line_width_pt/x_title/y_title
+  逐项回报 applied/kept_default/rejected，未验证字段（legend/页面尺寸）明确拒绝
+  不静默忽略；
+- **调色板使用约束**：每套 family 标注 suitable/avoid（如 duo_warm 红蓝有方向
+  含义勿用于无序分类），`origin_status`/计划流可查；
+- **CI**：GitHub Actions（windows-latest，Py3.10/3.12）跑 `--offline-test`
+  （无 Origin 依赖）+ compileall；新增 CONTRIBUTING.md / SECURITY.md；
+- **`--offline-test`**：注册表一致性/错误码/计划流/模板前置校验/文件 IO/能力
+  矩阵，CI 可跑；smoke/mcp_handshake_test.mjs 重写为机器无关自动探测，
+  校验 35 工具 + capabilities + 计划流。
+
+### 修复
+- `_execute_plan_impl` 缺失 `import json`；
+- OPJU 保存：originpro 1.1.15 无 `save_project`，改用 `op.save` + 双兜底；
+- mcp-handshake 测试脚本硬编码旧机器路径。
+
 ## 2.0.6 (2026-08-20)
 
 **修复「已安装，重启后生效」永续显示（v2.0.5 修复方向修正）**：
@@ -119,8 +175,8 @@
 
 ## 2.0.0 (2026-08-18)
 
-排版与统计大版本（工具 16 → 28 个）。设计上参考知名 origin-mcp 的"调色板/轴标题
-语义化/按图型排版"思路并重新实现（clean-room，未复制其代码/文档），新增自研
+排版与统计大版本（工具 16 → 28 个）。按"调色板/轴标题语义化/按图型排版"的
+设计方向独立实现（clean-room，未复制任何第三方代码/文档），新增自研
 OKLab/CVD 可读性度量：
 
 ### 排版（origin_plot / origin_plot_file 新增参数）

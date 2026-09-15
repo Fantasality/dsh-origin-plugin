@@ -92,27 +92,36 @@ def _cvd_sim(rgb: Sequence[float], kind: str) -> List[float]:
 
 # ---------------------------------------------------------------------------
 # 2. 内置调色板库（自建，注重 CVD 区分；颜色本身不受版权保护）
+#    每套带 usage 使用约束：科学含义色/特殊图型不适用时明确说明
 # ---------------------------------------------------------------------------
 PALETTES: Dict[str, Dict] = {
     "ocean": {
         "colors": ["#0072B2", "#D55E00", "#009E73", "#56B4E9", "#CC79A7", "#E69F00"],
         "note": "CVD-safe 设计（蓝/橙/绿/天蓝/品红/黄；前两色高对比）",
+        "usage": {"suitable": ["通用多序列（默认首选）", "色盲可读要求场景"],
+                  "avoid": []},
     },
     "nightfall": {
         "colors": ["#001F5B", "#D1495B", "#EDAE49", "#58A4B0", "#8FB339", "#8E44AD"],
         "note": "深蓝基调，冷热对比鲜明",
+        "usage": {"suitable": ["折线/散点多序列", "深色强调"], "avoid": ["热力图"]},
     },
     "duo_warm": {
         "colors": ["#B2182B", "#EF8A62", "#FDDBC7", "#67A9CF", "#2166AC", "#F4A582"],
         "note": "冷暖双极（适合温度/极性数据）",
+        "usage": {"suitable": ["发散/极性数据（正负值、温度冷热、上调下调）", "双序列对比"],
+                  "avoid": ["无序分类（红蓝有方向含义）", ">=5 个分类序列"]},
     },
     "forest": {
         "colors": ["#1B9E77", "#D95F02", "#7570B3", "#E7298A", "#66A61E", "#E6AB02"],
-        "note": "调色板 2 风格（高区分、色感良好）",
+        "note": "高区分度分类色系（色感良好）",
+        "usage": {"suitable": ["通用分类多序列"], "avoid": []},
     },
     "grey_tone": {
         "colors": ["#404040", "#808080", "#C8C8C8", "#2E4057", "#7D8CA3", "#A9B7C6"],
         "note": "低彩度，适合灰度打印场景",
+        "usage": {"suitable": ["灰度打印", "印刷期刊"],
+                  "avoid": ["热力图/面积图", "需要高区分度的多序列"]},
     },
 }
 DEFAULT_PALETTE = "ocean"
@@ -176,7 +185,19 @@ def choose_palette(series_count: int, family: Optional[str] = None) -> Dict:
             f"选 {best}（{len(PALETTES[best]['colors'])} 色）："
             f"感知色差 {m['min_oklab_distance']}，白底对比度 {m['min_contrast_white']}"),
         "metrics": m,
+        "usage": dict(PALETTES[best].get("usage", {"suitable": [], "avoid": []})),
     }
+
+
+def palette_catalog() -> Dict:
+    """全部调色板 + 使用约束（供 origin_status / 计划流 introspection）。"""
+    out = {}
+    for name, entry in PALETTES.items():
+        out[name] = {"note": entry.get("note", ""),
+                     "n_colors": len(entry["colors"]),
+                     "usage": entry.get("usage", {"suitable": [], "avoid": []}),
+                     "metrics": get_palette_metrics(name)}
+    return out
 
 
 # ---------------------------------------------------------------------------
