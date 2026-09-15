@@ -113,6 +113,17 @@ CODE_META: Dict[str, tuple] = {
         ["确认目标目录可写（OneDrive/网盘同步目录可能锁定文件）",
          "换一个 output_dir 后重试"],
     ),
+    "window_activation_failed": (
+        True,
+        ["LabTalk 只在活动窗口内解析：先 origin_list_pages 复核图页短名",
+         "用 origin_manage_pages(action='activate', pages=[<短名>]) 显式激活后重试",
+         "若图页已隐藏/关闭，用 action='show' 或重新出图"],
+    ),
+    "layer_not_found": (
+        True,
+        ["用 origin_inspect_graph 查看图层数与索引（0 起始）",
+         "确认 layer 参数后重试"],
+    ),
 }
 
 VALID_CODES = frozenset(CODE_META)

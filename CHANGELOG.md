@@ -1,6 +1,63 @@
 # Changelog
 
 
+## 2.2.0 (2026-09-15)
+
+工具 35 → **43 个**。新增「细粒度编辑」层（让 AI 能像人一样微调已有图），并修复
+三条实测缺陷。全部改动建立在**真机探针**之上（smoke/labtalk_probe2..8），
+结论已数据化进代码与能力矩阵。
+
+### 新增：细粒度编辑（8 工具，`origin_edit.py`）
+
+| 工具 | 用途 |
+|---|---|
+| `origin_list_pages` | 列出全部页面（图页/工作簿/矩阵）+ 当前活动窗口 |
+| `origin_inspect_graph` | 巡检现状：图层几何/逐条曲线样式/轴设置/图例/页面尺寸（cm+dots+dpi） |
+| `origin_edit_plot` | 逐条微调：颜色/线宽/线型/符号形状大小填充/透明度/显示隐藏 |
+| `origin_edit_axis` | 轴标题/起止范围/刻度类型/网格/刻度长度/标签字号加粗小数位 |
+| `origin_edit_legend` | 显示隐藏/字号/边框/背景/四角锚点定位/自定义文本/恢复自动图例 |
+| `origin_edit_page` | 纸张尺寸（cm）、页面背景、图层位置与大小（%页） |
+| `origin_manage_pages` | 关闭/激活/重命名/隐藏/显示/复制页面（含工作簿；"帮我关掉几个窗口"） |
+| `origin_add_text` | 添加文本标注（峰位/条件说明） |
+
+设计要点（均由探针证据支撑）：
+- **COM 优先**：originpro 图层/曲线作用域读写（`plot_list`/`gl.get_int`/`set_int`/
+  `axis` 属性/`p.color`/`p.set_int('show')`）与活动窗口**无关**，任何时候可靠；
+- **LabTalk 先复核激活**：`ensure_active_graph()` 用 COM `activate()` + `is_active()`/
+  `page.name$` 复核，不符即返回 `window_activation_failed`，绝不"以为激活成功"；
+- **写入必读回**：每项改动返回 `{item, requested, status, readback}`，
+  status ∈ applied / applied_unverified / applied_adjusted / rejected / unsupported；
+  **NaN 读回一律判未生效**（NaN 比较恒为 False 会假成功——已修）；
+- **单位显式**：页面 dots↔cm（600dpi 实测）、图层 `layer.unit`（1=%页/3=cm/5=pixel）、
+  图例锚点用 dots 计算（`page.width/height` + `legend.width/height`），
+  避开 LabTalk `legend.x/y` 的混合单位坑。
+
+### 修复：三条实测缺陷（均带回归测试 `smoke/repro_defects.py --expect-fixed`）
+
+1. **verify 误判曲线数为 0（会主动骗人）**：原实现只统计 `gp[0]` 一层，多层图
+   （如分层 XRD）会数成 0 并报 `fail 需修复后复核`。现**跨全部图层统计**并给出
+   逐层明细；同时 `layer_count`/`bounds`/字号改为 COM 作用域通道，LabTalk 类检查
+   只在激活复核通过后使用，读不回来一律 `unreadable`，**只有"上下文可信且与期望
+   不符"才判 fail**（新增 `unreliable` 状态与 `context` 块）。
+2. **LabTalk 静默失靶**：`xb.*`/`legend.*`/`layer.*` 在活动窗口不是图页时静默返回
+   NaN 或落到别的窗口（实测：`layer.left` 读到工作簿的几何）。现新增
+   `_ensure_active_graph()` 与 `_lt_write_checked()`（激活复核 + 写入读回 + NaN 守卫），
+   错误码 `window_activation_failed`；轴标题一律改走 COM `gl.axis().title`
+   （探针证实 LabTalk `xb.text$` 在本机即使激活也不生效）。
+3. **xrd_pattern 量程压缩（Rietveld 三件套不可用）**：原实现把差谱向下偏移后与主谱
+   共用一条 Y 轴，主峰仅占量程 ~62% 且下部 25% 为空。现改为**双层布局**：上层
+   Observed 散点 + Calculated 线（满量程，实测主峰占 76.9%），下层 Difference
+   独立量程 + 零参考线 + 相刻线，两层 X 轴严格对齐（实测 7.9–82.1 完全一致），
+   上层隐藏 X 轴刻度只留最下层；`add_layer` 不可用时降级单层并在返回中标注。
+
+### 其他
+- `origin_status.capabilities` 新增 `fine_edit` 与 `channel_policy`（COM/LabTalk 通道策略）；
+- 新增错误码 `window_activation_failed` / `layer_not_found`；
+- 新增探针脚本 7 个（probe2..8）+ 冒烟 `smoke/fine_edit_test.py`（25 项断言）+
+  缺陷回归 `smoke/repro_defects.py`；
+- 回归：offline-test / selftest / Node SDK 握手（43 工具）全绿；细粒度编辑冒烟
+  含"换色读回""加粗前后 PNG 差异""关窗复核""跨层计数"等端到端断言。
+
 ## 2.1.0 (2026-09-15)
 
 工具 28 → **35 个**。补齐「可信交付」短板：文件导入、可编辑 OPJU 交付、

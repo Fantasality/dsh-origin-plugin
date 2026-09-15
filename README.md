@@ -4,7 +4,8 @@
 
 - 🤖 对话触发：`「用 Origin 画 y=x² 折线图并导出 PNG」` → 模型自动调用工具 → 图片落盘
 - 🔌 官方 MCP 桥接：通过 DSH 内置的 `@deepseek-ai/dsh-mcp-client` 注册为原生工具 `mcp__origin__*`
-- 🎨 **35 个工具**：2D 图 line/scatter/line_symbol/column/**histogram/box/bar** + 误差棒、3D、等高线、统计批
+- 🎨 **43 个工具**：2D 图 line/scatter/line_symbol/column/**histogram/box/bar** + 误差棒、3D、等高线、统计批
+- 🎛 **细粒度改图**：`origin_edit_plot/axis/legend/page` —— 只换一条线的颜色、加粗、隐藏、挪图例、改轴范围、调纸张尺寸；`origin_manage_pages` 关窗/改名；`origin_inspect_graph` 先看清现状
 - 📂 **文件导入**：`origin_load_file` 直接读 CSV/TXT/XLSX/XLS（中文路径/编码安全）
 - 🧩 **领域模板**：多谱线堆叠偏移 / XRD 三件套 / 双Y轴 / 森林图 / 多面板（`origin_plot_template`）
 - 📋 **绘图计划确认流**：`origin_plot_plan` 逐列画像+待确认问题 → `origin_execute_plan` 执行（不确定列先问）
@@ -165,7 +166,7 @@ powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\dsh_origin_plugin\regist
 1. **`origin-plotting` skill（DSH 原生机制）**：安装时自动写入
    `%APPDATA%\dsh-desktop\harness\skills\origin-plotting\SKILL.md` 与
    `~/.dsh\skills\origin-plotting\SKILL.md`。模型目录可见该 skill，按需加载后
-   直接获得：数据格式、35 工具速查表、科学边界、12+ 个任务模板——**不用再读 README**；
+   直接获得：数据格式、43 工具速查表、科学边界、12+ 个任务模板——**不用再读 README**；
 2. **`mcp__origin__origin_help` 工具**：不连接 Origin、约 1ms 返回同一份速查
    （JSON 格式，含 usage/tools/templates/tips），任何时刻可调用。
 
@@ -208,6 +209,14 @@ powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\dsh_origin_plugin\regist
 | `origin_verify_graph` | **确定性反读**（轴标题/字号/几何/图例/文件完整性） | `graph`, `expected_*` |
 | `origin_save_project` | **保存可编辑 OPJU 工程** | `path` |
 | `origin_export_delivery` | **一键交付目录**（源文件同级，图片+OPJU+核验） | `graph`, `source_path`, `fmts` |
+| `origin_list_pages` | **列出全部页面**（图页/工作簿）+ 活动窗口 | 无 |
+| `origin_inspect_graph` | **巡检现状**：图层几何/曲线样式/轴/图例/页面尺寸 | `graph` |
+| `origin_edit_plot` | **逐条改曲线**：颜色/线宽/线型/符号/透明度/隐藏 | `graph`, `edits` |
+| `origin_edit_axis` | **改轴**：标题/范围/刻度类型/网格/字号加粗 | `graph`, `axis`, `props` |
+| `origin_edit_legend` | **改图例**：显示隐藏/字号/边框/四角锚点/文本 | `graph`, `options` |
+| `origin_edit_page` | **改纸张 cm 尺寸 / 图层位置（%页）/ 背景** | `graph`, `page_size_cm` |
+| `origin_manage_pages` | **窗口管理**：关闭/激活/重命名/隐藏/复制 | `action`, `pages` |
+| `origin_add_text` | **加文本标注**（峰位/条件说明） | `graph`, `text`, `x`, `y` |
 
 ## 进阶能力
 
@@ -342,28 +351,72 @@ Origin 是**单实例 COM 自动化服务器**，且 comtypes 的 COM 接口指�
    覆盖多 DSH 实例同时操作同一 Origin 的极端场景；
 5. 实测：8 线程并发各画一张图 **8/8 通过**，单张耗时约 1~2 秒。
 
-## 目录结构
+## 细粒度改图（v2.2 新增：AI 帮你微调已有图）
+
+新手最常提的需求是"只改一点点"，例如「把第二条线换成红色」「这条曲线加粗一点」
+「图例挪到右上角」「冲掉几个多余的工作簿」。这类操作对应的是一整套编辑工具，
+且每一次改动都带**读回校验**：
 
 ```
+origin_inspect_graph(graph)                      # 先看清现状（几何/颜色/轴/图例/纸张）
+origin_edit_plot(graph, [{"plot": 1, "color": "#D55E00"}])          # 只改第 2 条线颜色
+origin_edit_plot(graph, [{"plot": 0, "line_width_pt": 2.5}])        # 第 1 条加粗
+origin_edit_axis(graph, axis="y", title="Pressure (kPa)",
+                 from_value=80, to_value=140,
+                 props={"show_grids": 1, "label_font_pt": 12, "label_bold": 1})
+origin_edit_legend(graph, {"position": "tr", "font_size_pt": 12})   # 挪到右上角
+origin_edit_page(graph, page_size_cm={"width": 8.9, "height": 6.5}) # 投稿单栏尺寸
+origin_manage_pages("close", pages=["Book3", "Book4"])              # 关掉多余窗口
+```
+
+**为什么这些改动是安全的**（三条纪律，全部由真机探针证据支撑）：
+
+1. **COM 优先**：探针矩阵显示 originpro 的图层/曲线作用域读写
+   （`plot_list` / `gl.get_int` / `set_int` / `axis` 属性 / `p.color`）**与活动窗口无关**，
+   任何时候都可靠；LabTalk 裸表达式（`xb.*` / `legend.*` / `layer.*`）只在目标图页
+   恰好是活动窗口时才解析，否则静默返回 NaN 或落到别的窗口（实测 `layer.left`
+   会读到工作簿的几何）。
+2. **激活必须复核**：所有 LabTalk 路径先 `activate()` 再以 `is_active()` / `page.name$`
+   复核，不符就返回 `window_activation_failed`，绝不"以为激活成功"。
+3. **写入必读回**：每项改动返回 `{item, requested, status, readback}`，
+   status 为 applied / applied_unverified（无读回的通道，如线宽，需目视确认）/
+   applied_adjusted（Origin 钳制了值）/ rejected（附原因）；
+   **NaN 读回一律判未生效**（NaN 比较恒为 False，是个会假成功的坑，已修）。
+
+## 已修的三条实测缺陷（v2.2）
+
+| 缺陷 | 现象 | 修复 |
+|---|---|---|
+| verify 曲线数误判 | 多层图只统计第 0 层 → 数成 0 条并报 `fail 需修复后复核`（主动骗人） | 跨全部图层统计 + 逐层明细；LabTalk 检查仅激活复核后使用，读不回来标 unreadable，**只有上下文可信且不符才 fail** |
+| LabTalk 静默失靶 | 活动窗口非图页时 `xb.*`/`legend.*`/`layer.*` 静默 NaN 或落到别的窗口 | `ensure_active_graph()` 激活复核 + `_lt_write_checked()` 写读回 + NaN 守卫；轴标题改走 COM `axis.title` |
+| xrd_pattern 量程压缩 | 差谱与主谱共用 Y 轴，主峰被压扁（仅占量程 ~62%） | 改**双层布局**：主谱满量程（实测 76.9%）+ 差谱独立量程 + 零线 + 相刻线，两层 X 轴严格对齐 |
+
+
+## 目录结构
+```
 dsh-origin-plugin/
-├── origin_engine.py          # 核心引擎：连接/写数/画图/导出/线程/错误升级/模板/交付/验证
+├── origin_engine.py          # 核心引擎：连接/写数/画图/导出/线程/错误升级/模板/交付
 ├── origin_errors.py          # 稳定错误码：枚举/恢复建议/遗留错误升级
 ├── plot_style.py             # OKLab 调色板 + CVD 模拟 + 布局预设 + 使用约束
 ├── origin_analysis.py        # 纯 numpy 统计：t/ANOVA/PCA/似然 KM
 ├── origin_fileio.py          # 文件导入：CSV/TXT/XLSX/XLS（多编码/嗅探/表头识别）
 ├── origin_plan.py            # 绘图计划：列画像/角色建议/待确认问题/plan_id 缓存
-├── origin_verify.py          # 确定性反读：轴标题/字号/几何/图例/文件完整性
-├── origin_mcp_server.py      # MCP 服务器（35 工具注册式），自带自测模式
+├── origin_verify.py          # 确定性反读：跨层曲线数/轴/几何/图例/文件完整性
+├── origin_edit.py            # 细粒度编辑：曲线/轴/图例/页面/窗口（逐项读回校验）
+├── origin_mcp_server.py      # MCP 服务器（43 工具注册式），自带自测模式
 ├── demo_call.py              # 最小可运行示例（不依赖 MCP）
 ├── register_to_dsh.ps1       # 注册脚本（幂等/UTF-8 安全/自动备份）
 ├── unregister_from_dsh.ps1   # 卸载脚本
 ├── skills/
-│   └── origin-plotting/SKILL.md  # DSH 原生 skill（模型速查，35 工具 + 科学边界）
+│   └── origin-plotting/SKILL.md  # DSH 原生 skill（模型速查 + 细粒度改图指引）
 ├── smoke/
 │   ├── origin_com_smoke_test.py   # COM 链路冒烟测试
 │   ├── advanced_test.py           # 删点/拟合/3D
 │   ├── science_test.py            # 直方图/误差棒/等高线…
-│   └── mcp_handshake_test.mjs     # 用 DSH 同款 Node SDK 验证 MCP 握手（机器无关）
+│   ├── fine_edit_test.py          # 细粒度编辑冒烟（25 项断言）
+│   ├── repro_defects.py           # 三条实测缺陷回归
+│   ├── labtalk_probe2..8.py       # 细粒度编辑能力真机探针（通道/单位矩阵）
+│   └── mcp_handshake_test.mjs     # 用 DSH 同款 Node SDK 验证 MCP 握手（43 工具）
 └── docs/
     ├── DESIGN.md              # 设计蓝图 + 真机探测矩阵 + 官方文档依据
     └── example*.png           # 真机示例图
@@ -392,6 +445,12 @@ node smoke\mcp_handshake_test.mjs
 .venv\Scripts\python.exe -X utf8 smoke\advanced_test.py
 .venv\Scripts\python.exe -X utf8 smoke\science_test.py
 
+:: 细粒度编辑冒烟（换色/加粗/隐藏/轴/图例/纸张/关窗 + 跨层计数回归）
+.venv\Scripts\python.exe -X utf8 smoke\fine_edit_test.py
+
+:: 三条实测缺陷回归（全绿才返回 0）
+.venv\Scripts\python.exe -X utf8 smoke\repro_defects.py --expect-fixed
+
 :: 最小调用示例
 .venv\Scripts\python.exe -X utf8 demo_call.py
 ```
@@ -401,10 +460,10 @@ node smoke\mcp_handshake_test.mjs
 - [ ] smoke 测试输出 `RESULT: OK`，`output\comtest.png` 存在
 - [ ] `--selftest` 输出 `SELFTEST OK`（含样式应用/幂等命名/预览/错误码/统计批）
 - [ ] `--concurrency-test` 输出 `CONCURRENCY-TEST OK`（8/8）
-- [ ] `--offline-test` 输出 `OFFLINE-TEST OK`（35 工具注册 + 计划流 + 文件 IO）
+- [ ] `--offline-test` 输出 `OFFLINE-TEST OK`（43 工具注册 + 计划流 + 文件 IO）
 - [ ] `--selftest` 输出 `SELFTEST OK`（含导入/计划流/模板/交付/反读/样式覆盖）
 - [ ] `--concurrency-test` 输出 `CONCURRENCY-TEST OK`（8/8）
-- [ ] `--mcp-test` 输出 `MCP-TEST OK`（35 工具可见，view_graph 返回 image 内容）
+- [ ] `--mcp-test` 输出 `MCP-TEST OK`（43 工具可见，view_graph 返回 image 内容）
 - [ ] `origin_view_graph` 的返回能被识图模型正确读出轴标题/图型/配色
 - [ ] `mcp_handshake_test.mjs` 输出 `HANDSHAKE-TEST OK`
 - [ ] `register_to_dsh.ps1` 执行成功，`dsh --profile web --dump-config` 可见 mcp-origin
@@ -433,7 +492,7 @@ node smoke\mcp_handshake_test.mjs
 ## 精简模式（可选）
 
 设置 `ORIGIN_MCP_PROFILE=compact` 可从工具集隐藏统计批（ttest/anova/pca/survival），
-适合只需要画图+基础分析的场景；其余 31 个工具不变。
+适合只需要画图+基础分析的场景；其余 39 个工具不变。
 
 ## License
 

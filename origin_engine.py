@@ -321,6 +321,61 @@ def _lt_read_str(expr):
     return None
 
 
+def _ensure_active_graph(graph=None):
+    """激活目标图页并复核（LabTalk 通道的前提）。
+
+    真机探针（probe6）证明：LabTalk 裸表达式只在目标图页恰为活动窗口时解析，
+    否则静默返回 NaN 或落到别的窗口。返回 (short_name, error_payload|None)。
+    """
+    op = _origin_app
+    if op is None:
+        return None, oerr.fail("connection_error", "未连接 Origin")
+    import origin_edit as oedit
+    return oedit.ensure_active_graph(op, op.po, graph)
+
+
+def _lt_write_checked(script, read_expr=None, expect=None, read_fn=None):
+    """LabTalk 写入 + 读回校验：返回 (ok, readback, note)。
+
+    - 先复核激活（否则直接判失败，避免"静默落到别的窗口"）；
+    - read_fn 优先（COM 读回通道，如 axis.title），否则用 read_expr 走 LabTalk；
+    - 读不到即判失败（宁可报未生效，也不谎报成功）。
+    """
+    short, err = _ensure_active_graph()
+    if err is not None:
+        return False, None, f"激活复核失败: {err.get('error')}"
+    try:
+        _origin_app.po.LT_execute(script)
+    except Exception as e:
+        return False, None, f"LabTalk 执行异常: {e}"
+    v = None
+    if read_fn is not None:
+        v, verr = safe_call(read_fn)
+        if verr is not None:
+            v = None
+    if v is None and read_expr:
+        v = _lt_read_float(read_expr)
+        if v is None:
+            v = _lt_read_str(read_expr)
+    if v is None:
+        return False, None, "写入后读回失败（通道不支持读回，或未落到目标图页）"
+    # NaN 是"读到了空值"，绝不能当作校验通过（NaN 比较恒为 False，会假成功）
+    try:
+        import math as _math
+        if isinstance(v, float) and _math.isnan(v):
+            return False, None, "读回为 NaN（该 LabTalk 通道在当前图层/版本下无效），判未生效"
+    except Exception:
+        pass
+    if expect is not None:
+        try:
+            if abs(float(v) - float(expect)) > 1e-6:
+                return False, v, f"读回 {v} 与期望 {expect} 不符"
+        except (TypeError, ValueError):
+            if str(v).strip() != str(expect).strip():
+                return False, v, f"读回 {v!r} 与期望 {expect!r} 不符"
+    return True, v, None
+
+
 def _origin_proc_count():
     """统计 Origin64 进程数（>1 说明存在多实例，需清理以免 COM 连错实例）。"""
     try:
@@ -405,6 +460,41 @@ def _describe_impl():
 # ---------------------------------------------------------------------------
 def _new_unique_name(prefix):
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
+
+
+def safe_call(fn, *args, **kwargs):
+    """调用并容错：返回 (result, error_str|None)。"""
+    try:
+        return fn(*args, **kwargs), None
+    except Exception as e:  # noqa: BLE001
+        return None, f"{type(e).__name__}: {e}"
+
+
+def _set_layer_geometry(gl, left=None, top=None, width=None, height=None):
+    """以 %页 单位设置图层几何（COM 作用域读写，窗口无关），返回逐项说明。"""
+    notes = []
+    try:
+        gl.set_int("unit", 1)          # 1 = %page
+    except Exception:
+        pass
+    for key, val in (("left", left), ("top", top),
+                     ("width", width), ("height", height)):
+        if val is None:
+            continue
+        ok = False
+        for setter in (lambda k=key, v=val: gl.set_float(k, float(v)),
+                       lambda k=key, v=val: gl.set_int(k, int(round(float(v))))):
+            _, err = safe_call(setter)
+            if err is None:
+                ok = True
+                break
+        back, _ = safe_call(gl.get_float, key)
+        if back is None:
+            back, _ = safe_call(gl.get_int, key)
+        hit = ok and isinstance(back, (int, float)) and abs(float(back) - float(val)) <= 0.05
+        notes.append(f"{key}={val}%{'✔' if hit else '✗'}"
+                     + (f"(读回 {back})" if not hit and back is not None else ""))
+    return notes
 
 
 def _page_names():
@@ -1477,6 +1567,14 @@ def _help_impl():
             "origin_read_worksheet": "读取工作表列数据（含列角色/点数）",
             "origin_view_graph": "把图渲染为内联图片，模型可直接看（不落盘）",
             "origin_apply_style": "对已有图应用排版/调色板/多序列区分（style_mode/family/style_overrides）",
+            "origin_list_pages": "列出全部页面（图页/工作簿/矩阵）+ 当前活动窗口",
+            "origin_inspect_graph": "巡检图页现状（几何/曲线样式/轴/图例/页面 cm）——改图前先看",
+            "origin_edit_plot": "逐条微调曲线：颜色/线宽/线型/符号/透明度/显示隐藏（每项带读回）",
+            "origin_edit_axis": "微调轴：标题/范围/刻度类型/网格/刻度长度/标签字号加粗",
+            "origin_edit_legend": "微调图例：显示隐藏/字号/边框/背景/四角锚点/文本",
+            "origin_edit_page": "纸张 cm 尺寸/页面背景/图层位置与大小（%页）",
+            "origin_manage_pages": "窗口管理：关闭/激活/重命名/隐藏/显示/复制页面",
+            "origin_add_text": "添加文本标注（峰位/条件说明）",
             "origin_ttest": "t 检验：one/两样本(Welch)/paired",
             "origin_anova": "单因素方差分析（每组一列）",
             "origin_pca": "主成分分析（载荷/解释方差/得分）",
@@ -1502,13 +1600,16 @@ def _help_impl():
             "双Y轴: origin_plot_template('dual_y', {'x':[..], 'left':[..], 'right':[..]})",
             "森林图: origin_plot_template('forest', {'labels':[..], 'effect':[..], 'ci_low':[..], 'ci_high':[..]})",
             "一键交付: origin_export_delivery(graph, source_path='数据.csv', fmts='png,pdf') -> 图片+OPJU 目录",
+            "微调改图: origin_inspect_graph(graph) 看现状 -> origin_edit_plot/edit_axis/edit_legend/edit_page 改 -> origin_view_graph 看效果",
+            "关窗口: origin_list_pages() 取短名 -> origin_manage_pages('close', pages=['Book3','Book4'])",
         ],
         "tips": [
             "所有工具返回 JSON；ok=false 时读 error_code / recoverable / next_actions 安全分支重试",
             "画图可用 style_mode=default|journal|presentation 与 family=调色板家族 提升排版",
             "需视觉校验时调用 origin_view_graph（模型看图）；需程序核验时 origin_verify_graph（对象反读）",
+            "细粒度改动逐项回报 applied/applied_unverified/rejected；applied_unverified（如线宽）需目视确认",
+            "LabTalk 类操作只在活动窗口内解析：返回 window_activation_failed 时先用 origin_manage_pages 激活图页",
             "科学边界：不虚构/不补数据；不确定列先问；派生列标注 derived；不静默拟合/平滑/归一化",
-            "style_overrides 显式样式逐项回报 applied/rejected，未验证字段明确拒绝不静默忽略",
             "origin_status 的 capabilities.known_risks 是版本坑清单（如 plotxy 204/215 在 2026b）",
             "幂等命名：origin_plot 传 graph_name 重复调用会清旧重画，图名稳定",
             "file_path 省略时输出到 ~/dsch_origin_plugin/output（自动命名）",
@@ -2261,60 +2362,133 @@ def _plot_template_impl(template_id, data, graph_name=None, title=None,
                         detail=(f"stacked_spectra 完成：{len(names)} 条谱线"
                                 f"（间距 {step:.4g}）-> {short}"))
         elif t == "xrd_pattern":
+            # D3 修复：改用**双层布局**（不再把差谱挤进主图同一 Y 轴）。
+            # 缺陷根因：三序列共用一条 Y 轴时，差谱的向下偏移会占据大量量程，
+            # 主峰被压扁/裁切（实测主峰仅占量程 ~62% 且下部 25% 是空的）。
+            # 现方案：上层 = Observed 散点 + Calculated 线（满量程，峰值占 ~90%）；
+            #         下层 = Difference（独立量程，X 轴与上层严格对齐）+ 相刻线。
             x = _flist(data["two_theta"])
             obs = _flist(data["observed"])
             calc = _flist(data["calculated"])
             diff = _flist(data["difference"]) if "difference" in data else None
-            allv = np.asarray([v for v in (obs + calc) if np.isfinite(v)])
-            top = float(allv.max()) if allv.size else 1.0
-            bottom = float(allv.min()) if allv.size else 0.0
-            span = max(top - bottom, 1e-9)
-            base_pos = bottom - 0.12 * span
             cols = {"two_theta": x, "Observed": obs, "Calculated": calc}
             if diff is not None:
-                cols["Difference"] = [d + base_pos for d in diff]
+                cols["Difference"] = diff
             w = _write_data_impl(cols)
             if not w.get("ok"):
                 return w
             wsobj = op.find_sheet("w", w["worksheet"])
             lname = _ensure_graph_name(graph_name, title or "XRD")
             gp = op.new_graph(lname=lname)
-            gl = gp[0]
-            gl.add_plot(wsobj, 1, 0, type="s")   # Observed 散点
-            gl.add_plot(wsobj, 2, 0, type="l")   # Calculated 线
-            if diff is not None:
-                gl.add_plot(wsobj, 3, 0, type="l")  # Difference 下移线
-            phase_sheets = []
-            for ph_name, positions in (data.get("phases") or {}).items():
-                seg_x, seg_y = [], []
-                for p in positions:
-                    try:
-                        pv = float(p)
-                    except (TypeError, ValueError):
-                        continue
-                    seg_x += [pv, pv, float("nan")]
-                    seg_y += [base_pos - 0.04 * span, base_pos, float("nan")]
-                if not seg_x:
-                    continue
-                pws = op.new_sheet("w", _new_unique_name("Phase"))
-                pws.from_list(0, seg_x, lname=f"{ph_name}_x")
-                pws.from_list(1, seg_y, lname=f"{ph_name}_y")
-                gl.add_plot(pws, 1, 0, type="l")
-                phase_sheets.append(str(ph_name))
-            gl.rescale()
             short = gp.obj.GetName()
-            style = _apply_style_impl(short, plot_type="line",
-                                      columns=["Observed", "Calculated"],
-                                      style_mode=style_mode, family=family,
-                                      x_title="2θ (degrees)")
             try:
-                gl.axis("y").title = "Intensity (a.u.)"
+                op.po.LT_execute(f"win -a {short};")
             except Exception:
                 pass
+            gl_top = gp[0]
+            gl_top.add_plot(wsobj, 1, 0, type="s")     # Observed 散点
+            gl_top.add_plot(wsobj, 2, 0, type="l")     # Calculated 线
+            gl_top.rescale()
+            layers_ok = True
+            gl_bot = None
+            if diff is not None:
+                gl_bot, e_add = safe_call(gp.add_layer)
+                if gl_bot is None:
+                    layers_ok = False
+            if diff is not None and gl_bot is not None:
+                gl_bot.add_plot(wsobj, 3, 0, type="l")  # Difference 线
+                # 零参考线（2 点直线，便于判读偏差方向）
+                zws = op.new_sheet("w", _new_unique_name("XRDZero"))
+                zws.from_list(0, [float(x[0]), float(x[-1])], lname="zx")
+                zws.from_list(1, [0.0, 0.0], lname="zy")
+                gl_bot.add_plot(zws, 1, 0, type="l")
+                gl_bot.rescale()
+            # 几何：上层 8%~70%，下层 72%~94%（%页，layer.unit=1）
+            geo = []
+            if layers_ok and gl_bot is not None:
+                geo = _set_layer_geometry(gl_top, left=14.0, top=8.0,
+                                          width=80.0, height=60.0)
+                geo += _set_layer_geometry(gl_bot, left=14.0, top=72.0,
+                                           width=80.0, height=22.0)
+            # X 轴严格对齐：把上层 X 范围抄给下层
+            xlim = None
+            try:
+                lim = gl_top.axis("x").limits
+                if isinstance(lim, (tuple, list)) and len(lim) >= 2:
+                    xlim = (float(lim[0]), float(lim[1]))
+            except Exception:
+                xlim = None
+            if xlim and gl_bot is not None:
+                for gl_, tag in ((gl_top, "top"), (gl_bot, "bottom")):
+                    try:
+                        gl_.axis("x").sfrom = xlim[0]
+                        gl_.axis("x").sto = xlim[1]
+                    except Exception:
+                        pass
+            # 轴标题：上层 Y=Intensity (a.u.)，下层 Y=Difference；X 只在最下层
+            try:
+                gl_top.axis("y").title = "Intensity (a.u.)"
+            except Exception:
+                pass
+            if gl_bot is not None:
+                try:
+                    gl_bot.axis("y").title = "Difference"
+                except Exception:
+                    pass
+                try:
+                    gl_top.set_int("x.showAxes", 0)      # 上层隐藏 X 轴与刻度
+                except Exception:
+                    pass
+                try:
+                    gl_bot.axis("x").title = "2θ (degrees)"
+                except Exception:
+                    pass
+            else:
+                try:
+                    gl_top.axis("x").title = "2θ (degrees)"
+                except Exception:
+                    pass
+            # 相刻线（画在下层，从下层底部到其 35% 高度处）
+            phase_sheets = []
+            if diff is not None and gl_bot is not None:
+                dy_from, dy_to = None, None
+                try:
+                    dl = gl_bot.axis("y").limits
+                    if isinstance(dl, (tuple, list)) and len(dl) >= 2:
+                        dy_from, dy_to = float(dl[0]), float(dl[1])
+                except Exception:
+                    pass
+                if dy_from is not None and dy_to is not None:
+                    span_d = max(dy_to - dy_from, 1e-9)
+                    for ph_name, positions in (data.get("phases") or {}).items():
+                        seg_x, seg_y = [], []
+                        for p in positions:
+                            try:
+                                pv = float(p)
+                            except (TypeError, ValueError):
+                                continue
+                            seg_x += [pv, pv, float("nan")]
+                            seg_y += [dy_from - 0.02 * span_d,
+                                      dy_from + 0.33 * span_d, float("nan")]
+                        if not seg_x:
+                            continue
+                        pws = op.new_sheet("w", _new_unique_name("Phase"))
+                        pws.from_list(0, seg_x, lname=f"{ph_name}_x")
+                        pws.from_list(1, seg_y, lname=f"{ph_name}_y")
+                        gl_bot.add_plot(pws, 1, 0, type="l")
+                        phase_sheets.append(str(ph_name))
+            style = _apply_style_impl(short, plot_type="line",
+                                      columns=["Observed", "Calculated"],
+                                      style_mode=style_mode, family=family)
+            layout_note = ("双层布局（主谱满量程 + 差谱独立量程）"
+                           if gl_bot is not None else
+                           "单层兜底（add_layer 不可用，差谱与主谱同轴）")
             r = oerr.ok(graph=short, template=t, phases=phase_sheets,
-                        style=style,
-                        detail=(f"xrd_pattern 完成：Observed 散点 + Calculated 线"
-                                f"{' + Difference 下移线' if diff is not None else ''}"
+                        layer_layout=("two_layer" if gl_bot is not None else "single_layer"),
+                        geometry=geo, style=style,
+                        detail=(f"xrd_pattern 完成：{layout_note}；"
+                                f"Observed 散点 + Calculated 线"
+                                f"{' + Difference 独立量程层' if diff is not None else ''}"
                                 f"{' + ' + str(len(phase_sheets)) + ' 组相刻线' if phase_sheets else ''}"
                                 f" -> {short}"))
         elif t == "dual_y":
@@ -2568,6 +2742,7 @@ def _capabilities_impl():
         "plotxy_type_204_215": False,
         "templates": sorted(PLOT_TEMPLATES),
         "xlsx_via_openpyxl": None,
+        "fine_edit": True,
     }
     try:
         import openpyxl  # noqa: F401
@@ -2581,7 +2756,109 @@ def _capabilities_impl():
         "known_risks": CAPABILITY_KNOWN_RISKS,
         "features": feats,
         "session_mode": os.environ.get("ORIGIN_SESSION", "attach"),
+        "channel_policy": ("COM 作用域通道（窗口无关，优先）；LabTalk 仅在校验激活后使用"
+                           "（未激活时会静默失靶，见 origin_verify 的 context 说明）"),
     }
+
+
+# ---------------------------------------------------------------------------
+# 细粒度编辑（origin_edit 模块；面向"只改一条线的颜色/加粗/关几个窗口"这类需求）
+# ---------------------------------------------------------------------------
+def _list_pages_impl():
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        import origin_edit as oedit
+        return oedit.list_pages(_origin_app, _origin_app.po)
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+def _inspect_graph_impl(graph=None, max_plots=40):
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        import origin_edit as oedit
+        return oedit.inspect_graph(_origin_app, _origin_app.po, graph,
+                                   max_plots=max_plots)
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+def _edit_plot_impl(graph, edits):
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        import origin_edit as oedit
+        return oedit.edit_plot(_origin_app, _origin_app.po, graph, edits)
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+def _edit_axis_impl(graph, axis="x", layer=0, title=None, from_value=None,
+                    to_value=None, scale=None, props=None):
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        import origin_edit as oedit
+        return oedit.edit_axis(_origin_app, _origin_app.po, graph, axis=axis,
+                               layer=layer, title=title, from_=from_value,
+                               to=to_value, scale=scale, **dict(props or {}))
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+def _edit_legend_impl(graph, options):
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        import origin_edit as oedit
+        return oedit.edit_legend(_origin_app, _origin_app.po, graph,
+                                 **dict(options or {}))
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+def _edit_page_impl(graph, page_size_cm=None, background=None, layer=None,
+                    layer_geometry_pct=None):
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        import origin_edit as oedit
+        return oedit.edit_page(_origin_app, _origin_app.po, graph,
+                               page_size_cm=page_size_cm, background=background,
+                               layer=layer, layer_geometry_pct=layer_geometry_pct)
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+def _manage_pages_impl(action, pages=None, new_name=None):
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        import origin_edit as oedit
+        return oedit.manage_pages(_origin_app, _origin_app.po, action,
+                                  pages=pages, new_name=new_name)
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+def _add_text_impl(graph, text, x=None, y=None):
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        import origin_edit as oedit
+        return oedit.add_text(_origin_app, _origin_app.po, graph, text, x=x, y=y)
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
 
 
 # ---------------------------------------------------------------------------
@@ -2807,3 +3084,52 @@ def plot_template(template_id, data, graph_name=None, title=None,
 def execute_plan(plan_id, fmt=None, file_path=None, graph_name=None, width=1200):
     return _execute_plan_impl(plan_id, fmt=fmt, file_path=file_path,
                               graph_name=graph_name, width=width)
+
+
+# ---------------------------------------------------------------------------
+# 细粒度编辑公开 API（COM 线程；每项改动都带读回与 applied/rejected 状态）
+# ---------------------------------------------------------------------------
+@_synchronized
+def list_pages():
+    return _list_pages_impl()
+
+
+@_synchronized
+def inspect_graph(graph=None, max_plots=40):
+    return _inspect_graph_impl(graph=graph, max_plots=max_plots)
+
+
+@_synchronized
+def edit_plot(graph, edits):
+    return _edit_plot_impl(graph, edits)
+
+
+@_synchronized
+def edit_axis(graph, axis="x", layer=0, title=None, from_value=None,
+              to_value=None, scale=None, props=None):
+    return _edit_axis_impl(graph, axis=axis, layer=layer, title=title,
+                           from_value=from_value, to_value=to_value,
+                           scale=scale, props=props)
+
+
+@_synchronized
+def edit_legend(graph, options):
+    return _edit_legend_impl(graph, options)
+
+
+@_synchronized
+def edit_page(graph, page_size_cm=None, background=None, layer=None,
+              layer_geometry_pct=None):
+    return _edit_page_impl(graph, page_size_cm=page_size_cm,
+                           background=background, layer=layer,
+                           layer_geometry_pct=layer_geometry_pct)
+
+
+@_synchronized
+def manage_pages(action, pages=None, new_name=None):
+    return _manage_pages_impl(action, pages=pages, new_name=new_name)
+
+
+@_synchronized
+def add_text(graph, text, x=None, y=None):
+    return _add_text_impl(graph, text, x=x, y=y)

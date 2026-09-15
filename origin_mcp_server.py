@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-DSH Origin 画图插件 —— MCP 服务器（v2.1，注册式 + 交付/验证/模板/计划流）
+DSH Origin 画图插件 —— MCP 服务器（v2.2，注册式 + 交付/验证/模板/计划流 + 细粒度编辑）
 ==========================================================================
 
 通过 Model Context Protocol (stdio) 把 Origin 能力暴露给 DSH：
@@ -43,7 +43,7 @@ _EXTENDED = os.environ.get("ORIGIN_MCP_PROFILE", "full").lower() != "compact"
 
 mcp = MCPServer(
     name="origin",
-    version="2.1.0",
+    version="2.2.0",
     instructions=(
         "Origin 科学绘图工具（连接本机 Origin 自动化服务器）。"
         "画图/分析前先调用 origin_help 或 origin_catalog 获取速查（秒回）。"
@@ -86,11 +86,21 @@ TOOL_CATALOG = [
     {"name": "origin_plot_contour", "group": "画图", "desc": "等高线 / 填充等高线 / 3D 线框"},
     {"name": "origin_histogram", "group": "画图", "desc": "直方图统计（可画图导出）"},
     {"name": "origin_view_graph", "group": "画图", "desc": "把图渲染为内联图片（模型可看，不落盘）"},
+    # 交付与验证
     {"name": "origin_verify_graph", "group": "交付与验证", "desc": "确定性反读核验（轴标题/字号/几何/图例/文件完整性）"},
     {"name": "origin_apply_style", "group": "画图", "desc": "对已有图应用排版/调色板/多序列区分（显式样式逐项回报）"},
     {"name": "origin_export", "group": "画图", "desc": "导出 PNG/SVG/PDF/TIF/EMF 文件"},
     {"name": "origin_save_project", "group": "交付与验证", "desc": "保存当前项目为可编辑 OPJU"},
     {"name": "origin_export_delivery", "group": "交付与验证", "desc": "一键交付：源文件同级建目录收纳图片+OPJU 并核验"},
+    # 细粒度编辑
+    {"name": "origin_list_pages", "group": "细粒度编辑", "desc": "列出全部页面（图页/工作簿）+ 活动窗口"},
+    {"name": "origin_inspect_graph", "group": "细粒度编辑", "desc": "巡检图页现状：图层几何/曲线样式/轴/图例/页面尺寸"},
+    {"name": "origin_edit_plot", "group": "细粒度编辑", "desc": "逐条微调曲线：颜色/线宽/线型/符号/透明度/隐藏"},
+    {"name": "origin_edit_axis", "group": "细粒度编辑", "desc": "微调轴：标题/范围/刻度类型/网格/字号加粗"},
+    {"name": "origin_edit_legend", "group": "细粒度编辑", "desc": "微调图例：显示隐藏/字号/边框/位置锚点/文本"},
+    {"name": "origin_edit_page", "group": "细粒度编辑", "desc": "微调页面与图层几何：纸张 cm 尺寸/背景/图层位置"},
+    {"name": "origin_manage_pages", "group": "细粒度编辑", "desc": "窗口管理：关闭/激活/重命名/隐藏/复制页面"},
+    {"name": "origin_add_text", "group": "细粒度编辑", "desc": "添加文本标注（峰位/条件说明）"},
     # edit
     {"name": "origin_filter_data", "group": "数据编辑", "desc": "删除/裁剪数据点（写回原工作表）"},
     # fit / analysis
@@ -554,6 +564,149 @@ def origin_export_delivery(graph: str, source_path: str = "",
     return engine.export_delivery(graph, source_path=source_path or None,
                                   output_dir=output_dir or None, fmts=fmts,
                                   width=width, save_opju=save_opju)
+
+
+# ---------------------------------------------------------------------------
+# 细粒度编辑（P3：AI 帮新手"只改一条线/关几个窗口"这类微调）
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def origin_list_pages() -> dict:
+    """列出项目内全部页面（图页/工作簿/矩阵），含短名、长名与当前活动窗口。
+
+    做任何微调前先调用它拿到准确短名——LabTalk 类操作只在活动窗口内解析，
+    用错名字会静默失靶（本插件已加激活复核，但仍建议先取准确短名）。
+    """
+    return engine.list_pages()
+
+
+@mcp.tool()
+def origin_inspect_graph(graph: str = "", max_plots: int = 40) -> dict:
+    """巡检图页现状（只读）：图层几何/每条曲线颜色与符号/轴范围与字号/图例/页面尺寸。
+
+    改图前先调用它看清现状，再决定改哪一项。返回里所有通道都标明单位：
+    页面尺寸给 cm + dots + dpi，图层几何给 %页，图例坐标给图层单位。
+
+    Args:
+        graph: 图短名；留空用活动图。
+        max_plots: 每层最多返回多少条曲线明细。
+    """
+    return engine.inspect_graph(graph=graph or None, max_plots=max_plots)
+
+
+@mcp.tool()
+def origin_edit_plot(graph: str, edits: list) -> dict:
+    """逐条微调曲线（新手最常用：换颜色 / 加粗 / 改线型 / 换符号 / 半透明 / 隐藏）。
+
+    Args:
+        graph: 图短名。
+        edits: 编辑项列表，每项指定目标与要改的属性：
+            {"plot": 0 或 "Book1_B"（缺省=第 0 条）,
+             "layer": 0,
+             "color": "#FF0000" 或 [255,0,0],
+             "line_width_pt": 2.5,
+             "line_style": 0实线|1虚线|2点线|3点划线,
+             "symbol_kind": 2（3=上三角 5=菱形 17=六边形）,
+             "symbol_size": 8,
+             "symbol_interior": 0实心|1空心,
+             "transparency": 0~100,
+             "visible": true/false}
+    Returns:
+        {"ok": true, "changes": [{item, requested, status, readback}], ...}
+        status=applied 表示写入并读回一致；applied_unverified 表示通道写入成功但
+        该属性无读回（如线宽），需用 origin_view_graph 目视确认；rejected 附原因。
+    """
+    return engine.edit_plot(graph, edits)
+
+
+@mcp.tool()
+def origin_edit_axis(graph: str, axis: str = "x", layer: int = 0,
+                     title: str = "", from_value: float = None,
+                     to_value: float = None, scale: int = None,
+                     props: dict = None) -> dict:
+    """微调某条轴：标题 / 起止范围 / 刻度类型 / 网格 / 刻度长度 / 标签字体字号加粗。
+
+    Args:
+        graph: 图短名。
+        axis: x | y（也可 x2/y2 等次轴，视模板而定）。
+        layer: 图层索引（0 起始）。
+        title: 轴标题文本。
+        from_value / to_value: 起止值（手动设定范围，避免 rescale 波动）。
+        scale: 0/1=线性 2=log10 3=ln。
+        props: 其他属性 {"show_grids":0/1, "show_axes":0/1, "opposite":0/1,
+            "tick_length":6, "reverse":1, "label_bold":1, "label_font_pt":12,
+            "label_decimals":2, "label_type":1, "grid_major_type":1}
+    Returns:
+        {"ok": true, "changes": [...], "n_applied": N}
+    """
+    return engine.edit_axis(graph, axis=axis, layer=layer,
+                            title=title or None, from_value=from_value,
+                            to_value=to_value, scale=scale, props=props)
+
+
+@mcp.tool()
+def origin_edit_legend(graph: str, options: dict) -> dict:
+    """微调图例：显示/隐藏、字号、边框、位置（四角锚点或显式坐标）、自定义文本。
+
+    Args:
+        graph: 图短名。
+        options: {"visible": true/false, "font_size_pt": 12, "frame": true/false,
+            "background": 0~5（0无框 1黑线框 4白色遮罩）,
+            "position": "tr"|"tl"|"br"|"bl"（四角锚点，最省心的用法）,
+            "x": 图层单位坐标, "y": 图层单位坐标,
+            "left": 物理坐标整数, "top": 物理坐标整数,
+            "text": "自定义图例文本（会关闭自动更新）",
+            "rebuild": true（恢复自动图例）}
+    Returns:
+        {"ok": true, "changes": [{item, requested, status, readback}]}
+    """
+    return engine.edit_legend(graph, options)
+
+
+@mcp.tool()
+def origin_edit_page(graph: str, page_size_cm: dict = None, background: int = None,
+                     layer: int = 0, layer_geometry_pct: dict = None) -> dict:
+    """微调页面与图层几何：纸张尺寸（cm）、页面背景、图层位置与大小（%页）。
+
+    Args:
+        graph: 图短名。
+        page_size_cm: {"width": 8.9, "height": 6.5}（cm；投稿单栏 8.9cm 常用）
+        background: 页面背景色索引（0=白）
+        layer: 图层索引（配合 layer_geometry_pct）
+        layer_geometry_pct: {"left":14,"top":8,"width":80,"height":60}（%页）
+    Returns:
+        {"ok": true, "changes": [...]}，page_size 会给出 cm↔dots↔dpi 的全部读数。
+    """
+    return engine.edit_page(graph, page_size_cm=page_size_cm, background=background,
+                            layer=layer, layer_geometry_pct=layer_geometry_pct)
+
+
+@mcp.tool()
+def origin_manage_pages(action: str, pages: list = None, new_name: str = "") -> dict:
+    """窗口管理：关闭 / 激活 / 重命名 / 隐藏 / 显示 / 复制页面（含工作簿与图页）。
+
+    典型用法："把多余的两个空工作簿关掉" → action='close', pages=['Book3','Book4']。
+
+    Args:
+        action: close | activate | rename | hide | show | duplicate
+        pages: 页面短名列表（用 origin_list_pages 获取；close 支持 'Book*' 通配）
+        new_name: action=rename 时的新名字
+    Returns:
+        {"ok": true, "results": [{page, status, note}], "n_applied": N}
+        每项都做复核（关闭后确认页面消失 / 激活后确认 page.name$ 匹配）。
+    """
+    return engine.manage_pages(action, pages=pages, new_name=new_name or None)
+
+
+@mcp.tool()
+def origin_add_text(graph: str, text: str, x: float = None, y: float = None) -> dict:
+    """在图上添加文本标注（注释峰位、条件说明等）。
+
+    Args:
+        graph: 图短名。
+        text: 文本内容。
+        x / y: 图层数据坐标；留空则用默认位置。
+    """
+    return engine.add_text(graph, text, x=x, y=y)
 
 
 # ---------------------------------------------------------------------------
@@ -1306,6 +1459,6 @@ if __name__ == "__main__":
     elif arg == "--concurrency-test":
         _concurrency_test()
     elif arg == "--json-echo":  # 供外部快速探测
-        print(json.dumps({"server": "origin", "ok": True, "version": "2.1.0"}))
+        print(json.dumps({"server": "origin", "ok": True, "version": "2.2.0"}))
     else:
         _sync_stdio_server()

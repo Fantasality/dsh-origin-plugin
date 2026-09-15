@@ -1,6 +1,6 @@
 {
   "name": "dsh-origin-plugin",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Drive Origin scientific plotting from DeepSeek Harness AI chat via MCP - 35 tools: file import (CSV/TXT/XLSX, CJK-safe), plan-confirm flow, domain templates (stacked spectra/XRD/dual-Y/forest/multi-panel), editable OPJU delivery, deterministic readback verification, inline image preview, statistics batch (t/ANOVA/PCA/survival), version capability handshake, stable error codes. Market-safe bundle: self-locating server path, fail-open startup, sync stdio transport.",
   "license": "MIT",
   "type": "module",

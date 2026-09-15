@@ -72,10 +72,13 @@ try {
   const tools = await client.listTools();
   const names = tools.tools.map((t) => t.name).sort();
   console.log(`TOOLS(${names.length}):`, names.join(', '));
-  if (names.length < 35) throw new Error(`工具数 ${names.length} < 35`);
+  if (names.length < 43) throw new Error(`工具数 ${names.length} < 43`);
   for (const must of ['origin_plot_file', 'origin_plot_plan', 'origin_execute_plan',
     'origin_plot_template', 'origin_verify_graph', 'origin_load_file',
-    'origin_save_project', 'origin_export_delivery']) {
+    'origin_save_project', 'origin_export_delivery',
+    'origin_list_pages', 'origin_inspect_graph', 'origin_edit_plot',
+    'origin_edit_axis', 'origin_edit_legend', 'origin_edit_page',
+    'origin_manage_pages', 'origin_add_text']) {
     if (!names.includes(must)) throw new Error(`缺少 ${must}`);
   }
 
