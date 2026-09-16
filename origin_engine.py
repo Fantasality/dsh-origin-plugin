@@ -3939,8 +3939,11 @@ def _plot_template_impl(template_id, data, graph_name=None, title=None,
                     '"', '\\"').replace('%', '%%')
                 esc_r = str(right_name).replace(
                     '"', '\\"').replace('%', '%%')
+                # 换行必须用真 LF：LabTalk 对象属性赋值不解析 "\n" 转义
+                # （probe 实证：字面 "\n" 原样存进 legend 并显示；真换行被
+                # Origin 规范化为 CRLF，图例正确分两行）
                 op.po.LT_execute(
-                    f'legend.text$ = "\\l(1.1) {esc_l}\\n\\l(2.1) {esc_r}";')
+                    f'legend.text$ = "\\l(1.1) {esc_l}\n\\l(2.1) {esc_r}";')
             except Exception:
                 pass
             note = (f"模板 {used_template}" if used_template
@@ -4072,8 +4075,9 @@ def _plot_template_impl(template_id, data, graph_name=None, title=None,
                 elif legend_mode == "first_last" and len(names) >= 2:
                     esc1 = names[0].replace('"', '\\"')
                     esc2 = names[-1].replace('"', '\\"')
+                    # 真换行（probe 实证："\n" 字面不解析，真 LF 才分行）
                     op.po.LT_execute(
-                        f'legend.text$ = "\\l(1) {esc1}\\n\\l({len(names)}) {esc2}";')
+                        f'legend.text$ = "\\l(1) {esc1}\n\\l({len(names)}) {esc2}";')
             except Exception:
                 pass
             r = oerr.ok(graph=short, template=t, series=names,
@@ -4118,6 +4122,11 @@ def _plot_template_impl(template_id, data, graph_name=None, title=None,
             import origin_edit as _oedit
             _oedit.set_axis_title_checked(gl, "x", x_title or "Z' (Ω)", po=op.po)
             _oedit.set_axis_title_checked(gl, "y", y_title or "-Z'' (Ω)", po=op.po)
+            # 单系列无图例（轴标题已表达 Z'/-Z''；内部列名不上图）
+            try:
+                _oedit.edit_legend(op, op.po, short, visible=False)
+            except Exception:
+                pass
             style = _apply_style_impl(short, plot_type="line_symbol",
                                       columns=["Z"], style_mode=style_mode,
                                       family=family, apply_axis_titles=False)

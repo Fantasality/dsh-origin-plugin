@@ -55,6 +55,8 @@
 | 9 | 网盘同步目录（OneDrive 等）交付 | 文件被锁、导出半截 | 同步进程占用 | 换本地目录；`delivery_error` 会提示 |
 | 10 | 中文路径导出 | 个别通道写不出 | LabTalk 对非 ASCII 路径的历史差异 | 引擎保存走 ASCII 临时目录搬运；导出走绝对路径+文件头校验 |
 | 11 | `expGraph` 静默失败 | 命令不抛异常但文件没生成 | LabTalk 静默失败特性 | 三级导出回退链 + 每级文件存在性/文件头校验（`export_error` 带 attempts 明细） |
+| 12 | 3D（GL 层）轴标题写入 | `layer.xl$/yl$/zl$` 与 COM `axis().title` 全部静默失败（读回空、图上仍显占位符） | GL 图层对象模型与 2D 不同，本机 Origin 2026 + originpro 1.1.15 实证无可用通道 | 如实拒绝（不冒充支持）；3D 图请在 Origin 内手动改轴标题；`plot3d` 的 `title` 参数（图页名）仍可用 |
+| 13 | 3D 图色标（colorbar） | 未实现 | GL 层色标对象通道同上 | 同上；文档提示手动添加 |
 
 ## 5. 与其他 Origin 方案的差异
 
