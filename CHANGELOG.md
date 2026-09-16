@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.6.2 (2026-09-16)
+
+**npm 安装契约修复**（桌面市场可安装三道闸门）：
+
+- `@deepseek-ai/dsh-mcp-client` 从精确 pin `0.1.0-rc.7` 放宽为 `>=0.1.0-rc.1`
+  ——dshfind 的 desktopPreviewVerdict 七项复核第 6 条要求 `@deepseek-ai/dsh*`
+  range 覆盖桌面端运行时（0.1.1-rc.2），精确 pin 判 `runtime-range`，
+  导致市场只展示不进可安装列表。
+- 其余六项复核逐条核对通过（name/version、无 deprecated、无 lifecycle 脚本、
+  repository https 回链、dsh.bundle.patch 安全相对路径、dist 官方源+sha512）。
+- package.json 描述 50→62 工具。
 ## 2.6.1 (2026-09-16)
 
 **npm 包修复版**：2.6.0 的 `files` 白名单遗漏 v2.5.0/v2.6.0 新增模块
