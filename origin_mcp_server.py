@@ -43,7 +43,7 @@ _EXTENDED = os.environ.get("ORIGIN_MCP_PROFILE", "full").lower() != "compact"
 
 mcp = MCPServer(
     name="origin",
-    version="2.2.1",
+    version="2.2.2",
     instructions=(
         "Origin 科学绘图工具（连接本机 Origin 自动化服务器）。"
         "画图/分析前先调用 origin_help 或 origin_catalog 获取速查（秒回）。"
@@ -371,7 +371,9 @@ def origin_plot_template(template_id: str, data: dict, graph_name: str = "",
                          title: str = "", style_mode: str = "default",
                          family: str = "", offset: str = "auto",
                          reverse_x: bool = False, fmt: str = "",
-                         file_path: str = "", width: int = 1200) -> dict:
+                         file_path: str = "", width: int = 1200,
+                         x_title: str = "", y_title: str = "",
+                         gradient: bool = False) -> dict:
     """领域模板绘图（科研高频图型，全部由真机验证过的原语组合）。
 
     Args:
@@ -448,10 +450,11 @@ def origin_plot_contour(data: dict, plot_type: str = "contour", fmt: str = "png"
 @mcp.tool()
 def origin_histogram(worksheet: str, column: str = "", bins: int = 10,
                      plot: bool = False, file_path: str = "",
-                     width: int = 1200) -> dict:
-    """直方图统计；plot=True 时画柱状图并导出。"""
+                     width: int = 1200, color: str = "") -> dict:
+    """直方图统计；plot=True 时画柱状图并导出。color 可选 "#RRGGBB"（默认调色板首色）。"""
     return engine.histogram(worksheet, column or 0, bins=bins, plot=plot,
-                            file_path=file_path or None, width=width)
+                            file_path=file_path or None, width=width,
+                            color=color or None)
 
 
 @mcp.tool()
@@ -507,7 +510,7 @@ def origin_apply_style(graph: str, plot_type: str = "line",
 def origin_verify_graph(graph: str = "", expected_x_title: str = "",
                         expected_y_title: str = "", min_font_pt: float = None,
                         expected_series: int = None, legend_visible: bool = None,
-                        files: list = None) -> dict:
+                        files: list = None, allow_full_overlap: bool = False) -> dict:
     """确定性反读核验（程序把图页对象属性读回来逐项比对）。
 
     与 origin_view_graph（模型看渲染图）互补，双保险。检查项：图层/曲线数、
@@ -530,7 +533,8 @@ def origin_verify_graph(graph: str = "", expected_x_title: str = "",
                                expected_y_title=expected_y_title or None,
                                min_font_pt=min_font_pt,
                                expected_series=expected_series,
-                               legend_visible=legend_visible, files=files)
+                               legend_visible=legend_visible, files=files,
+                               allow_full_overlap=allow_full_overlap)
 
 
 @mcp.tool()
@@ -687,7 +691,8 @@ def origin_manage_pages(action: str, pages: list = None, new_name: str = "") -> 
     典型用法："把多余的两个空工作簿关掉" → action='close', pages=['Book3','Book4']。
 
     Args:
-        action: close | activate | rename | hide | show | duplicate
+        action: close | closeAll | activate | rename | hide | show | duplicate
+            （closeAll 关闭项目内全部页面，会话产物一键清理，不需要 pages）
         pages: 页面短名列表（用 origin_list_pages 获取；close 支持 'Book*' 通配）
         new_name: action=rename 时的新名字
     Returns:
@@ -727,10 +732,17 @@ def origin_filter_data(worksheet: str, drop_rows: list = None,
 @mcp.tool()
 def origin_fit(worksheet: str, x_column: str = "", y_column: str = "",
                kind: str = "linear", plot_curve: bool = True,
-               graph: str = "", title: str = "") -> dict:
-    """对工作表数据做曲线拟合，可选把拟合曲线加到图上。"""
+               graph: str = "", title: str = "",
+               drop_report_pages: bool = True) -> dict:
+    """对工作表数据做曲线拟合，可选把拟合曲线加到图上。
+
+    kind 支持 linear 与 Origin 内置 NLFit 名（ExpDec1/Gauss/Lorentz/Boltzmann/
+    DoseResp/MichaelisMenten/Logistic/Poly2...，返回值带 supported_kinds 清单）。
+    drop_report_pages=True 自动关闭 NLFit 的 FitLine*/Residual* 报告副产品页。
+    """
     return engine.fit(worksheet, x_column or 0, y_column or 1, kind=kind,
-                      plot_curve=plot_curve, graph=graph or None, title=title or None)
+                      plot_curve=plot_curve, graph=graph or None,
+                      title=title or None, drop_report_pages=drop_report_pages)
 
 
 @mcp.tool()
@@ -742,16 +754,29 @@ def origin_stats(worksheet: str, columns: list = None) -> dict:
 @mcp.tool()
 def origin_transform(worksheet: str, column: str = "", op: str = "smooth",
                      window: int = 5, method: str = "moving",
-                     new_x: list = None, write_back: bool = True) -> dict:
-    """数据变换（结果写入新列或返回）。"""
+                     new_x: list = None, write_back: bool = True,
+                     return_values: bool = True) -> dict:
+    """数据变换（结果写入新列或返回）。
+
+    op: smooth/normalize/derivative/interpolate 之外新增 ln/log10/reciprocal/
+    exp/sqrt/abs。return_values=True 且结果 ≤2000 点时直接回传 values 数组，
+    可直接喂给 origin_plot_template 等内存数据接口。
+    """
     return engine.transform(worksheet, column or 0, op=op, window=window,
-                            method=method, new_x=new_x, write_back=write_back)
+                            method=method, new_x=new_x, write_back=write_back,
+                            return_values=return_values)
 
 
 @mcp.tool()
-def origin_integrate(worksheet: str, x_column: str = "", y_column: str = "") -> dict:
-    """数值积分（梯形法），计算曲线下面积 AUC。"""
-    return engine.integrate(worksheet, x_column or 0, y_column or 1)
+def origin_integrate(worksheet: str, x_column: str = "", y_column: str = "",
+                     baseline=None) -> dict:
+    """数值积分（梯形法），计算曲线下面积 AUC。
+
+    baseline: None 不扣；"min" 以 y 最小值为基线；"first" 以首点为基线；
+    或直接传数值。DSC 焓变等需要扣基线的场景用。
+    """
+    return engine.integrate(worksheet, x_column or 0, y_column or 1,
+                            baseline=baseline)
 
 
 @mcp.tool()
@@ -1459,6 +1484,6 @@ if __name__ == "__main__":
     elif arg == "--concurrency-test":
         _concurrency_test()
     elif arg == "--json-echo":  # 供外部快速探测
-        print(json.dumps({"server": "origin", "ok": True, "version": "2.2.1"}))
+        print(json.dumps({"server": "origin", "ok": True, "version": "2.2.2"}))
     else:
         _sync_stdio_server()

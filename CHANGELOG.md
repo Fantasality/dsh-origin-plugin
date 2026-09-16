@@ -1,5 +1,49 @@
 # Changelog
 
+## 2.2.2 (2026-09-16)
+
+**26 个化学场景实测（大学基础 → Nature 级）暴露的 20 项缺点全量修复**，
+另修复 1 项 P0 级"verify 假绿"。
+
+### P0 —— 输出错误 / 假成功
+- **multi_panel 三面板图层完全重叠**：add_layer 默认同位叠放 → 现按层纵向
+  均分 %页几何（层间 3% 间隙），y 标题逐层写入，除末层面板外隐藏 X 刻度；
+- **verify_graph 假绿**：新增**层间 bbox 重叠检测**（部分重叠 2%~90% = fail；
+  完全重叠 = warn，双 Y 类共享绘图区布局可传 `allow_full_overlap=true` 放行）；
+- **dual_y 右轴标题被 LabTalk 占位符机制吞掉**（"库仑效率 (%)" → "% (1.2)"、
+  "mAh/g" → "mah/g"）：新增 `set_axis_title_checked` 写后读回验证器
+  （COM → LabTalk 转义 → 对偶轴 y2 三级通道），dual_y/stacked/xrd/multi_panel
+  全部接入；`_apply_style_impl` 新增 `apply_axis_titles` 开关，模板分支不再被
+  推断标题二次覆盖；
+- **forest 模板**：labels 逐行标注（此前只显示第一个）；CI 线/零参考线改用
+  `draw -l` 绘制，不再泄漏进图例。
+
+### P1 —— 工作流断裂 / 高摩擦
+- `transform` 新增 **ln / log10 / reciprocal / exp / sqrt / abs** 算子（动力学
+  ln[A]、Arrhenius 1/T、二级 1/[A] 不再需要 AI 自算回写）；结果 ≤2000 点直接
+  回传 `values` 数组，可与 plot_template 内存数据接口直通（TGA/DTG 双 Y 链路
+  从四段拼接降为两步）；对 0/负数取对数等无效点在 `invalid_points` 提示；
+- `plot3d` surface 显式网格**形状自适应**（行=x 与行=y 两种写法都接受，自动
+  转置），形状不匹配时返回友好报错（此前是 numpy 底层 "inhomogeneous" 天书）；
+- 多系列 y 轴标题不再自动硬编（k_Pt_C → "K pt" 的失真根因：主干互不相同时
+  返回空标题，交由 x_title/y_title 或 edit_axis 显式指定）；`capitalize()`
+  改为仅首字符大写（"mAh/g" 不再被压成 "mah/g"）；
+- **xrd_pattern**：相刻线改红色 + 1.5pt 加粗（不再与 Difference 同色同宽混为
+  噪声）；Observed 密集散点缩小（symbol_size 3），Calculated 线不再被淹没；
+  上层残留 x 标题对象清空（"two_theta" 悬浮字修复）。
+
+### P2 —— 功能补齐 / 文档
+- `fit` 返回 `supported_kinds` 模型名清单（此前是暗知识；MichaelisMenten/
+  Boltzmann/DoseResp 等 Origin 内置 NLFit 名直通）；默认自动关闭 NLFit 的
+  FitLine*/Residual* 报告副产品页（实测 7 次 fit 多开 14 页的根治）；
+- `integrate` 新增 `baseline`（"min"/"first"/数值，DSC 焓变扣基线）；
+- `histogram` 新增 `color`（默认接入调色板首色，不再纯黑）；
+- `manage_pages` 新增 `closeAll`（会话产物一键清理）；
+- 模板支持 `x_title`/`y_title` 覆盖；`stacked_spectra` 支持 `gradient=true`
+  系列渐变色；
+- SKILL.md：plot3d data 格式、NLFit 模型名、fit 副作用、list_pages 返回结构、
+  transform 新算子、重叠检查语义全部写入。
+
 ## 2.2.1 (2026-09-16)
 
 **skill 重构：工具参考手册 → 决策流 SOP**（代码零改动，工具数不变仍为 43）。

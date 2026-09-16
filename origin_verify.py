@@ -219,6 +219,7 @@ def verify_graph(op, po, graph, expected=None, files=None):
 
     # --- 图层几何：COM 作用域读写（窗口无关；单位见 layer.unit） ---
     unit_label = {1: "%page", 2: "inch", 3: "cm", 4: "mm", 5: "pixel", 6: "point"}
+    layer_boxes = []       # [(i, left, top, w, h)]，仅 %页且四值齐全时收集
     for i, gl in enumerate(layers):
         unit = None
         try:
@@ -241,6 +242,9 @@ def verify_graph(op, po, graph, expected=None, files=None):
         if any(v is None for v in vals.values()):
             add(f"layer{i}_geometry", "unreadable", f"图层 {i} 几何部分不可读")
             continue
+        if int(unit or 1) == 1 and all(isinstance(v, (int, float)) for v in vals.values()):
+            layer_boxes.append((i, float(vals["left"]), float(vals["top"]),
+                                float(vals["width"]), float(vals["height"])))
         ul = unit_label.get(int(unit or 1), f"unit={unit}")
         if int(unit or 1) == 1:      # %页：可判越界
             inb = (0 <= vals["left"] < 100 and 0 <= vals["top"] < 100
@@ -259,6 +263,49 @@ def verify_graph(op, po, graph, expected=None, files=None):
             add(f"layer{i}_geometry", "pass",
                 f"几何 left={vals['left']:.3f} top={vals['top']:.3f} "
                 f"w={vals['width']:.3f} h={vals['height']:.3f} ({ul})", **vals)
+
+    # --- 层间 bbox 重叠检测（P0 修复：2026-09-16 c23 三面板完全重叠而 verify
+    #     假绿的教训。部分重叠 2%~90% => fail（任何布局都不合法）；
+    #     完全重叠 >90% => warn（双 Y 类共享绘图区布局合法，可传
+    #     expected.allow_full_overlap=True 转为 pass），默认提醒目视确认）---
+    if len(layer_boxes) >= 2 and not expected.get("skip_overlap_check"):
+        allow_full = bool(expected.get("allow_full_overlap"))
+
+        def _inter(a, b):
+            _, ax_, ay, aw, ah = a
+            _, bx, by, bw, bh = b
+            ox = max(0.0, min(ax_ + aw, bx + bw) - max(ax_, bx))
+            oy = max(0.0, min(ay + ah, by + bh) - max(ay, by))
+            return ox * oy
+
+        for m in range(len(layer_boxes)):
+            for n in range(m + 1, len(layer_boxes)):
+                a, b = layer_boxes[m], layer_boxes[n]
+                inter = _inter(a, b)
+                base_area = max(min(a[3] * a[4], b[3] * b[4]), 1e-9)
+                ratio = inter / base_area
+                pair = f"layer{a[0]}+layer{b[0]}"
+                if ratio > 0.9:
+                    if allow_full:
+                        add(f"layer_overlap:{pair}", "pass",
+                            f"完全重叠（{ratio:.0%}）——已声明为共享绘图区布局"
+                            "（如双 Y）", overlap=ratio)
+                    else:
+                        add(f"layer_overlap:{pair}", "warn",
+                            f"图层 {a[0]} 与 {b[0]} 完全重叠（{ratio:.0%}）。"
+                            "若为双 Y 类共享绘图区布局属正常（verify 传 "
+                            "expected.allow_full_overlap=true）；否则是多面板"
+                            "布局损坏，需检查图层几何", overlap=ratio)
+                elif ratio > 0.02:
+                    add(f"layer_overlap:{pair}", "fail",
+                        f"图层 {a[0]} 与 {b[0]} 部分重叠（{ratio:.0%}）——"
+                        "面板/图层互相遮挡，需调整几何",
+                        overlap=ratio,
+                        a=list(a), b=list(b))
+                else:
+                    add(f"layer_overlap:{pair}", "pass",
+                        f"图层 {a[0]} 与 {b[0]} 无明显重叠（{ratio:.1%}）",
+                        overlap=ratio)
 
     # --- 图例（LabTalk，需激活复核） ---
     if not activation_verified:

@@ -77,6 +77,11 @@ PLOT_TYPES_CN = {
 # ---------------------------------------------------------------------------
 # 领域模板注册表（origin_plot_template；每条都只用"真机验证过的原语"搭建）
 # ---------------------------------------------------------------------------
+# fit 支持的拟合类型提示（2026-09-16 补齐：此前模型名是"暗知识"）
+FIT_SUPPORTED_KINDS = ["linear", "ExpDec1", "ExpGrow1", "Gauss", "Lorentz",
+                       "Boltzmann", "DoseResp", "MichaelisMenten", "Logistic",
+                       "Poly2"]
+
 PLOT_TEMPLATES = {
     "stacked_spectra": {
         "desc": "多谱线纵向堆叠偏移（XPS/UV-Vis/PL/FTIR 多样品对比）",
@@ -917,8 +922,17 @@ def _filter_data_impl(worksheet, drop_rows=None, x_column=0, x_min=None, x_max=N
 
 
 def _fit_impl(worksheet, x_column, y_column, kind="linear", plot_curve=True,
-              graph=None, title=None):
-    """拟合：linear（线性）或 Origin 内置拟合函数名（如 ExpDec1/Gauss/Polynomial...）。
+              graph=None, title=None, drop_report_pages=True):
+    """拟合：linear（线性）或 Origin 内置拟合函数名（如 ExpDec1/Gauss/...）。
+
+    supported_kinds（2026-09-16 补齐，此前模型名是"暗知识"只能蒙）：
+    本机 Origin 2026 常见可用 NLFit 名：ExpDec1 / ExpGrow1 / Gauss / Lorentz /
+    Boltzmann / DoseResp / MichaelisMenten / Logistic / Poly2（以 Origin 内置
+    函数目录为准，未知名会返回可用列表）。
+
+    drop_report_pages=True（默认）：自动关闭 NLFit 产生的 FitLine*/Residual*
+    报告副产品页面 —— 参数与报告已在返回值里，页面留着会爆窗口
+    （2026-09-16 实测 7 次 fit 多开 14 页）。
 
     返回: {"ok": True, "kind": ..., "parameters": {...}, "report": ..., "fit_curves": ...,
            "graph": 可选（拟合曲线已上图时）}
@@ -971,8 +985,24 @@ def _fit_impl(worksheet, x_column, y_column, kind="linear", plot_curve=True,
             "report": rep,
             "fit_curves": curves,
             "worksheet": str(wks),
+            "supported_kinds": FIT_SUPPORTED_KINDS,
             "detail": f"{fit_kind} 拟合完成，参数见 parameters",
         }
+
+        # NLFit 报告副产品页面清理（FitLine*/Residual*：参数已在返回值里，
+        # 页面留着会爆窗口 —— 2026-09-16 实测 7 次 fit 多开 14 页）
+        removed_pages = []
+        if drop_report_pages:
+            try:
+                for pn in _page_names():
+                    if pn not in pages_before and (
+                            pn.startswith("FitLine") or pn.startswith("Residual")
+                            or "Report" in pn):
+                        if _delete_graph_page(pn):
+                            removed_pages.append(pn)
+            except Exception:
+                pass
+        result["removed_report_pages"] = removed_pages
 
         # 拟合曲线加图：原始数据（散点）+ 拟合曲线（线）
         if plot_curve and curves:
@@ -999,9 +1029,12 @@ def _plot3d_impl(data, plot_type="surface", fmt="png", file_path=None, width=120
                  output_dir=None, title=None):
     """3D 图：surface（矩阵表面）或 scatter（XYZ 散点）。
 
-    surface 的 data: {"z": [[...],...]}（2D 网格，自动生成 X/Y 索引网格）
-                     或 {"x": [...], "y": [...], "z": [[...],...]}（显式网格向量）
-    scatter 的 data: {"x": [...], "y": [...], "z": [...]}
+    surface 的 data（两种写法都会自动识别行列方向）:
+      {"z": [[...],...]}                        隐式网格（自动生成 X/Y 索引）
+      {"x": [...], "y": [...], "z": [[...],...]} 显式网格；z[行][列] 行对应 y、
+                                                列对应 x，AI 直觉的行=x 写法
+                                                也会自动转置（2026-09-16 修复）
+    scatter 的 data: {"x": [...], "y": [...], "z": [...]}（三个等长一维列表）
     返回: {"ok": True, "graph": ..., "file": ..., ...}
     """
     try:
@@ -1020,11 +1053,32 @@ def _plot3d_impl(data, plot_type="surface", fmt="png", file_path=None, width=120
                 return {"ok": False, "error": "surface 需要 data={'z': 二维网格, 可选 x/y 向量}"}
             z2d = np.asarray(data["z"], dtype=float)
             if z2d.ndim != 2:
-                return {"ok": False, "error": "z 必须是二维网格（列表的列表）"}
+                return oerr.fail(
+                    "invalid_request",
+                    "z 必须是二维网格（列表的列表）。"
+                    "隐式网格: {'z': [[...],...]}；显式网格: {'x':[...], 'y':[...], "
+                    "'z': [[...],...]}，其中 z[行][列] 的行对应 y、列对应 x")
             ny, nx = z2d.shape
             if "x" in data and "y" in data:
-                gx, gy = np.meshgrid(np.asarray(data["x"], dtype=float),
-                                     np.asarray(data["y"], dtype=float))
+                xvec = np.asarray(data["x"], dtype=float).ravel()
+                yvec = np.asarray(data["y"], dtype=float).ravel()
+                # 形状自适应（2026-09-16 c26 教训）：AI/人直觉写法是 z[行]=x 方向，
+                # 而 meshgrid(x, y) 产出 (len(y), len(x))。两种写法都接受，
+                # 形状不匹配时友好报错而不是 numpy 底层 "inhomogeneous shape"。
+                if z2d.shape == (len(yvec), len(xvec)):
+                    pass                                  # 行=y 列=x（标准）
+                elif z2d.shape == (len(xvec), len(yvec)):
+                    z2d = z2d.T                           # 行=x 列=y → 转置
+                    ny, nx = z2d.shape
+                else:
+                    return oerr.fail(
+                        "invalid_request",
+                        f"z 形状 {list(z2d.shape)} 与 x({len(xvec)})/y({len(yvec)}) "
+                        f"不匹配：z 应为 [len(y)][len(x)] 或 [len(x)][len(y)]"
+                        "（两种行列方向都会自动识别）",
+                        got={"z_shape": list(z2d.shape),
+                             "len_x": len(xvec), "len_y": len(yvec)})
+                gx, gy = np.meshgrid(xvec, yvec)
             else:
                 gx, gy = np.meshgrid(np.arange(nx, dtype=float),
                                      np.arange(ny, dtype=float))
@@ -1149,8 +1203,15 @@ def __skew_impl(v):
 
 
 def _transform_impl(worksheet, column, op="smooth", window=5, method="moving",
-                    new_x=None, write_back=True):
-    """数据变换：smooth(移动平均/中值) | normalize(minmax/zscore/sum) | derivative | interpolate。"""
+                    new_x=None, write_back=True, return_values=True):
+    """数据变换：smooth | normalize | derivative | interpolate |
+    ln | log10 | reciprocal | exp | sqrt | abs（后五者为 2026-09-16 补齐：
+    动力学 ln[A]-t、Arrhenius 1/T、二级 1/[A] 是化学高频路径，此前只能
+    让 AI 自算回写，多两跳且易错）。
+
+    return_values=True（默认）时结果 ≤2000 点直接随返回回传（values 字段），
+    可直接喂给 plot_template 等内存数据接口，免二次 read_worksheet。
+    """
     try:
         ok, conn = _connect_impl()
         if not ok:
@@ -1166,6 +1227,8 @@ def _transform_impl(worksheet, column, op="smooth", window=5, method="moving",
             return {"ok": False, "error": f"列不存在: {column}"}
         v = np.asarray(wks.to_list(ci), dtype=float)
         n = v.size
+        n_bad = 0
+        hint = ""
         op_name = (op or "smooth").lower()
 
         if op_name == "smooth":
@@ -1211,18 +1274,43 @@ def _transform_impl(worksheet, column, op="smooth", window=5, method="moving",
             new_col = _write_col_impl(wks, out, lname=f"{_col_name_impl(wks, ci)}_interp")
             return {"ok": True, "worksheet": str(wks), "new_column": new_col,
                     "new_x_column": xname, "points": int(nx.size),
+                    "values": [round(float(b), 8) for b in out[:2000]]
+                    if return_values and nx.size <= 2000 else None,
                     "detail": f"插值完成 -> 新列 {new_col}（{nx.size} 点）"}
+        elif op_name in ("ln", "log10", "reciprocal", "exp", "sqrt", "abs"):
+            with np.errstate(divide="ignore", invalid="ignore"):
+                if op_name == "ln":
+                    out = np.log(v)
+                elif op_name == "log10":
+                    out = np.log10(v)
+                elif op_name == "reciprocal":
+                    out = 1.0 / v
+                elif op_name == "exp":
+                    out = np.exp(v)
+                elif op_name == "sqrt":
+                    out = np.sqrt(np.where(v < 0, np.nan, v))
+                else:
+                    out = np.abs(v)
+            n_bad = int(np.size(out) - np.isfinite(out).sum())
+            hint = (f"（{n_bad} 个点无效，多为对 0/负数取对数或除零——"
+                    "先用 filter_data 清洗）" if n_bad else "")
         else:
-            return {"ok": False, "error": f"op 必须是 smooth/normalize/derivative/interpolate，收到 {op_name!r}"}
+            return {"ok": False, "error": f"op 必须是 smooth/normalize/derivative/interpolate/ln/log10/reciprocal/exp/sqrt/abs，收到 {op_name!r}"}
 
         if write_back:
             new_col = _write_col_impl(wks, out,
                                       lname=f"{_col_name_impl(wks, ci)}_{op_name}")
         else:
             new_col = None
+        n_out = int(np.size(out))
         return {"ok": True, "worksheet": str(wks), "new_column": new_col,
-                "points": int(n), "op": op_name,
-                "detail": f"{op_name} 完成" + (f"，结果写入新列 {new_col}" if new_col else "")}
+                "points": n_out, "op": op_name,
+                "values": [None if not np.isfinite(b) else round(float(b), 8)
+                           for b in out[:2000]]
+                if return_values and n_out <= 2000 else None,
+                "invalid_points": n_bad if op_name in ("ln", "log10", "reciprocal",
+                                                       "exp", "sqrt", "abs") else 0,
+                "detail": f"{op_name} 完成" + (f"，结果写入新列 {new_col}" if new_col else "") + hint}
     except Exception as e:
         return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
 
@@ -1234,8 +1322,15 @@ def _col_name_impl(wks, ci):
         return str(ci)
 
 
-def _integrate_impl(worksheet, x_column=0, y_column=1):
-    """数值积分（梯形法），返回曲线下面积 AUC。"""
+def _integrate_impl(worksheet, x_column=0, y_column=1, baseline=None):
+    """数值积分（梯形法），返回曲线下面积 AUC。
+
+    baseline（2026-09-16 补齐，DSC 焓变等需要扣基线）：
+      None      不扣（原行为，纯 AUC）；
+      "min"     以 y 最小值为基线扣除（快速近似）；
+      数值      以给定常数扣除；
+      "first"   以首点 y 值扣除（平稳基线起点近似）。
+    """
     try:
         ok, conn = _connect_impl()
         if not ok:
@@ -1252,11 +1347,28 @@ def _integrate_impl(worksheet, x_column=0, y_column=1):
         xv = np.asarray(wks.to_list(xi), dtype=float)
         yv = np.asarray(wks.to_list(yi), dtype=float)
         mask = np.isfinite(xv) & np.isfinite(yv)
-        auc = float(np.trapezoid(yv[mask], xv[mask]))
+        base_desc, base_val = "未扣除", 0.0
+        if baseline is not None:
+            if isinstance(baseline, str) and baseline.lower() == "min":
+                base_val = float(np.nanmin(yv[mask]))
+                base_desc = f"min(y)={base_val:.6g}"
+            elif isinstance(baseline, str) and baseline.lower() == "first":
+                base_val = float(yv[mask][0])
+                base_desc = f"y(首点)={base_val:.6g}"
+            else:
+                try:
+                    base_val = float(baseline)
+                    base_desc = f"常数 {base_val:.6g}"
+                except (TypeError, ValueError):
+                    return {"ok": False,
+                            "error": "baseline 取 None/'min'/'first' 或数值"}
+        auc = float(np.trapezoid(yv[mask] - base_val, xv[mask]))
         return {"ok": True, "worksheet": str(wks), "auc": auc,
+                "baseline": base_desc,
                 "x_column": str(x_column), "y_column": str(y_column),
                 "points": int(mask.sum()),
-                "detail": f"曲线下面积 AUC = {auc:.6g}（梯形法，{int(mask.sum())} 点）"}
+                "detail": f"曲线下面积 AUC = {auc:.6g}（梯形法，"
+                          f"{int(mask.sum())} 点，基线：{base_desc}）"}
     except Exception as e:
         return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
 
@@ -1410,8 +1522,12 @@ def _peak_find_impl(worksheet, x_column=0, y_column=1, min_height=None,
 
 
 def _histogram_impl(worksheet, column=0, bins=10, plot=False, file_path=None,
-                    fmt="png", width=1200):
-    """直方图：返回 bin 区间与频数；plot=True 时画柱状图并导出。"""
+                    fmt="png", width=1200, color=None):
+    """直方图：返回 bin 区间与频数；plot=True 时画柱状图并导出。
+
+    color（2026-09-16 补齐）："#RRGGBB" 或 Origin 调色板色名，默认接入当前
+    调色板体系首色（此前为纯黑默认，与插件配色纪律脱节）。
+    """
     try:
         ok, conn = _connect_impl()
         if not ok:
@@ -1446,6 +1562,24 @@ def _histogram_impl(worksheet, column=0, bins=10, plot=False, file_path=None,
             gl = gp[0]
             gl.add_plot(ws, 1, 0, type="c")
             gl.rescale()
+            # 柱色：显式 color > 调色板首色（P3：不再纯黑默认）
+            try:
+                import plot_style as _pst
+                if color:
+                    rgb = _hex_to_rgb_tuple(str(color))
+                else:
+                    rgb = _hex_to_rgb_tuple(
+                        _pst.choose_palette(1)["colors"][0])
+                for p_ in (gl.plot_list() or []):
+                    p_.color = rgb
+            except Exception:
+                pass
+            try:
+                for ax_, tx_ in (("x", str(column)), ("y", "Count")):
+                    import origin_edit as _oedit
+                    _oedit.set_axis_title_checked(gl, ax_, tx_, po=op.po)
+            except Exception:
+                pass
             gname = gp.obj.GetName()
             result["graph"] = gname
             r = _export_impl(gname, file_path=file_path, fmt=fmt, width=width)
@@ -1749,11 +1883,14 @@ def _apply_style_overrides(gl, plots, short_name, overrides):
 
 
 def _apply_style_impl(graph, plot_type=None, columns=None, style_mode="default",
-                      family=None, x_title=None, style_overrides=None):
+                      family=None, x_title=None, style_overrides=None,
+                      apply_axis_titles=True):
     """应用默认排版规则：调色板 + 多序列区分 + 语义轴标题（真机验证可靠）。
 
     返回 {ok, applied, applied_ops, style_plan}：每一步都给 reason，方便排查。
     仅当多序列或显式指定 style_mode/family 时改色；单序列保持 Origin 默认。
+    apply_axis_titles=False 用于模板分支（dual_y/xrd/stacked/multi_panel 自己已
+    设置语义标题，推断标题不得覆盖 —— 2026-09-16 c21/c10 标题损坏根因）。
     """
     try:
         op = _origin_app
@@ -1805,7 +1942,7 @@ def _apply_style_impl(graph, plot_type=None, columns=None, style_mode="default",
 
         # 轴标题：用 GLayer.axis('x'/'y').title（真机验证可靠）
         y_title = None
-        if isinstance(style_plan["axis_titles"].get("y"), dict):
+        if apply_axis_titles and isinstance(style_plan["axis_titles"].get("y"), dict):
             y_title = style_plan["axis_titles"]["y"].get("title")
         if y_title:
             try:
@@ -2194,7 +2331,8 @@ def op_find_graph(graph):
 # ---------------------------------------------------------------------------
 def _verify_graph_impl(graph=None, expected_x_title=None, expected_y_title=None,
                        min_font_pt=None, expected_series=None,
-                       legend_visible=None, files=None):
+                       legend_visible=None, files=None,
+                       allow_full_overlap=False):
     try:
         ok, conn = _connect_impl()
         if not ok:
@@ -2214,6 +2352,8 @@ def _verify_graph_impl(graph=None, expected_x_title=None, expected_y_title=None,
             expected["series"] = int(expected_series)
         if legend_visible is not None:
             expected["legend_visible"] = bool(legend_visible)
+        # 双 Y 类共享绘图区布局（dual_y/doubley）传 True，层间完全重叠判 pass
+        expected["allow_full_overlap"] = bool(allow_full_overlap)
         import origin_verify as ovf
         return ovf.verify_graph(op, op.po, target, expected=expected,
                                 files=files)
@@ -2303,7 +2443,8 @@ def _validate_template_data(template_id, data):
 
 def _plot_template_impl(template_id, data, graph_name=None, title=None,
                         style_mode="default", family=None, offset="auto",
-                        reverse_x=False, fmt=None, file_path=None, width=1200):
+                        reverse_x=False, fmt=None, file_path=None, width=1200,
+                        x_title=None, y_title=None, gradient=False):
     try:
         import numpy as np
         # 参数校验前置：离线可测，校验失败绝不拉起 Origin
@@ -2352,15 +2493,39 @@ def _plot_template_impl(template_id, data, graph_name=None, title=None,
             gl.rescale()
             short = gp.obj.GetName()
             style = _apply_style_impl(short, plot_type="line", columns=names,
-                                      style_mode=style_mode, family=family)
-            try:
-                gl.axis("y").title = "Intensity (a.u.)"
-            except Exception:
-                pass
+                                      style_mode=style_mode, family=family,
+                                      apply_axis_titles=False)
+            # 轴标题：显式覆盖 > 模板默认；写后读回验证（防 (%)/θ 类字符坑）
+            import origin_edit as _oedit
+            for ax, txt in (("x", x_title), ("y", y_title or "Intensity (a.u.)")):
+                if txt:
+                    _oedit.set_axis_title_checked(gl, ax, txt, po=op.po)
+            # 渐变色（P3）：按系列顺序在调色板首尾色之间线性插值，
+            # 让温度/浓度序列的层叠关系一眼可读
+            grad_note = None
+            if gradient and len(names) >= 3:
+                try:
+                    pal = style.get("style_plan", {}).get("palette", {}).get(
+                        "colors") if isinstance(style, dict) else None
+                    import plot_style as _pst
+                    if not pal:
+                        pal = _pst.choose_palette(len(names), family=family)["colors"]
+                    c0, c1 = _hex_to_rgb_tuple(pal[0]), _hex_to_rgb_tuple(pal[-1])
+                    pls = gl.plot_list() or []
+                    for i, pl in enumerate(pls):
+                        t_ = i / max(1, len(pls) - 1)
+                        rgb = tuple(int(c0[k] + (c1[k] - c0[k]) * t_) for k in range(3))
+                        pl.color = rgb
+                    grad_note = f"渐变色 {pal[0]} -> {pal[-1]}"
+                except Exception as _ge:
+                    grad_note = f"渐变色失败(不影响出图): {_ge}"
             r = oerr.ok(graph=short, template=t, series=names,
                         offsets=offsets, step=step, style=style,
+                        gradient=grad_note,
                         detail=(f"stacked_spectra 完成：{len(names)} 条谱线"
-                                f"（间距 {step:.4g}）-> {short}"))
+                                f"（间距 {step:.4g}）"
+                                f"{f'；{grad_note}' if grad_note else ''}"
+                                f" -> {short}"))
         elif t == "xrd_pattern":
             # D3 修复：改用**双层布局**（不再把差谱挤进主图同一 Y 轴）。
             # 缺陷根因：三序列共用一条 Y 轴时，差谱的向下偏移会占据大量量程，
@@ -2389,6 +2554,13 @@ def _plot_template_impl(template_id, data, graph_name=None, title=None,
             gl_top.add_plot(wsobj, 1, 0, type="s")     # Observed 散点
             gl_top.add_plot(wsobj, 2, 0, type="l")     # Calculated 线
             gl_top.rescale()
+            # Observed 密集散点缩小（P1：散点淹没 Calculated 线的修复）
+            try:
+                _plts_top = gl_top.plot_list() or []
+                if _plts_top:
+                    _plts_top[0].symbol_size = 3
+            except Exception:
+                pass
             layers_ok = True
             gl_bot = None
             if diff is not None:
@@ -2426,28 +2598,25 @@ def _plot_template_impl(template_id, data, graph_name=None, title=None,
                     except Exception:
                         pass
             # 轴标题：上层 Y=Intensity (a.u.)，下层 Y=Difference；X 只在最下层
-            try:
-                gl_top.axis("y").title = "Intensity (a.u.)"
-            except Exception:
-                pass
+            # 全部走 set_axis_title_checked（写后读回验证；2θ/(%) 等字符实测需要）
+            import origin_edit as _oedit
+            _oedit.set_axis_title_checked(gl_top, "y",
+                                          y_title or "Intensity (a.u.)", po=op.po)
+            if x_title:
+                _oedit.set_axis_title_checked(gl_top, "x", x_title, po=op.po)
             if gl_bot is not None:
-                try:
-                    gl_bot.axis("y").title = "Difference"
-                except Exception:
-                    pass
+                _oedit.set_axis_title_checked(gl_bot, "y", "Difference", po=op.po)
                 try:
                     gl_top.set_int("x.showAxes", 0)      # 上层隐藏 X 轴与刻度
+                    # 连上层残留的 x 标题对象一起清空，避免 "two_theta" 悬浮
+                    gl_top.axis("x").title = ""
                 except Exception:
                     pass
-                try:
-                    gl_bot.axis("x").title = "2θ (degrees)"
-                except Exception:
-                    pass
+                _oedit.set_axis_title_checked(
+                    gl_bot, "x", x_title or "2θ (degrees)", po=op.po)
             else:
-                try:
-                    gl_top.axis("x").title = "2θ (degrees)"
-                except Exception:
-                    pass
+                _oedit.set_axis_title_checked(
+                    gl_top, "x", x_title or "2θ (degrees)", po=op.po)
             # 相刻线（画在下层，从下层底部到其 35% 高度处）
             phase_sheets = []
             if diff is not None and gl_bot is not None:
@@ -2475,11 +2644,29 @@ def _plot_template_impl(template_id, data, graph_name=None, title=None,
                         pws = op.new_sheet("w", _new_unique_name("Phase"))
                         pws.from_list(0, seg_x, lname=f"{ph_name}_x")
                         pws.from_list(1, seg_y, lname=f"{ph_name}_y")
-                        gl_bot.add_plot(pws, 1, 0, type="l")
+                        pl_ph = gl_bot.add_plot(pws, 1, 0, type="l")
+                        # P1 修复：刻线用品红红 + 加粗，不再与 Difference 同色
+                        # 同宽混为噪声毛刺（实测 c10 教训）
+                        try:
+                            pl_ph.color = (204, 26, 26)
+                        except Exception:
+                            pass
+                        try:
+                            pl_ph.set_cmd("-wp 1.5")
+                        except Exception:
+                            try:
+                                pl_ph.linewidth = 1.5
+                            except Exception:
+                                pass
+                        try:
+                            pl_ph.set_int("show", 1)  # 确保可见
+                        except Exception:
+                            pass
                         phase_sheets.append(str(ph_name))
             style = _apply_style_impl(short, plot_type="line",
                                       columns=["Observed", "Calculated"],
-                                      style_mode=style_mode, family=family)
+                                      style_mode=style_mode, family=family,
+                                      apply_axis_titles=False)
             layout_note = ("双层布局（主谱满量程 + 差谱独立量程）"
                            if gl_bot is not None else
                            "单层兜底（add_layer 不可用，差谱与主谱同轴）")
@@ -2542,20 +2729,38 @@ def _plot_template_impl(template_id, data, graph_name=None, title=None,
             gl2.add_plot(wsobj, 2, 0, type="l")
             gl2.rescale()
             try:
-                gl1.axis("y").title = left_name
-            except Exception:
-                pass
-            try:
-                gl2.axis("y").title = right_name
+                pass  # 标题在 style 之后统一写（apply_axis_titles=False 防覆盖）
             except Exception:
                 pass
             style = _apply_style_impl(short, plot_type="line",
                                       columns=[left_name, right_name],
-                                      style_mode=style_mode, family=family)
+                                      style_mode=style_mode, family=family,
+                                      apply_axis_titles=False)
+            # 标题走 checked 通道：doubley 模板可见右轴可能是 layer2.y2，
+            # "库仑效率 (%)" 之类的文本曾被静默丢成 "% (1.2)"（c21 实测）
+            import origin_edit as _oedit
+            _t1 = _oedit.set_axis_title_checked(gl1, "y", y_title or left_name,
+                                                po=op.po)
+            _t2 = _oedit.set_axis_title_checked(gl2, "y", right_name, po=op.po)
+            title_channels = {"left": _t1.get("channel"), "right": _t2.get("channel")}
+            # 图例收尾：跨层引用重建后，右轴行可能残留 "%(1.2)" 字面占位符
+            # （列 long name 含 "(%)" 时 substitution 失败）。直接写图例文本，
+            # 用 \l(层.序) 引用线样式；文本里的 % 必须转义成 %%，
+            # 否则赋值时 LabTalk 又会对 "(%)" 做 substitution（c21 二次实测）。
+            try:
+                esc_l = str(y_title or left_name).replace(
+                    '"', '\\"').replace('%', '%%')
+                esc_r = str(right_name).replace(
+                    '"', '\\"').replace('%', '%%')
+                op.po.LT_execute(
+                    f'legend.text$ = "\\l(1.1) {esc_l}\\n\\l(2.1) {esc_r}";')
+            except Exception:
+                pass
             note = (f"模板 {used_template}" if used_template
                     else "普通双图层（右轴位置可能需在 OPJU 中手动调整）")
             r = oerr.ok(graph=short, template=t, template_used=used_template,
-                        left_axis=left_name, right_axis=right_name, style=style,
+                        left_axis=left_name, right_axis=right_name,
+                        title_channels=title_channels, style=style,
                         detail=f"dual_y 完成：左轴 {left_name} / 右轴 {right_name}"
                                f"（{note}；排版仅作用于第一层）-> {short}")
         elif t == "forest":
@@ -2571,13 +2776,12 @@ def _plot_template_impl(template_id, data, graph_name=None, title=None,
             ws = op.new_sheet("w", _new_unique_name("ForestPt"))
             ws.from_list(0, [float(i + 1) for i in range(n)], lname="study_index")
             ws.from_list(1, effect, lname="effect")
-            try:
-                ws.from_list(2, labels, lname="label")
-            except Exception:
-                pass
+            ci_lo_f, ci_hi_f = _flist(data["ci_low"]), _flist(data["ci_high"])
+            # CI 横线（NaN 断段）+ 零参考线：add_plot 保证可见性，
+            # 图例用 legend.text$ 只保留效应量行（c25 教训：辅助系列泄漏图例）
             ci_x, ci_y = [], []
             for i in range(n):
-                ci_x += [lo[i], hi[i], float("nan")]
+                ci_x += [ci_lo_f[i], ci_hi_f[i], float("nan")]
                 ci_y += [i + 1.0, i + 1.0, float("nan")]
             ws_ci = op.new_sheet("w", _new_unique_name("ForestCI"))
             ws_ci.from_list(0, ci_x, lname="ci_x")
@@ -2588,18 +2792,47 @@ def _plot_template_impl(template_id, data, graph_name=None, title=None,
             lname = _ensure_graph_name(graph_name, title or "Forest")
             gp = op.new_graph(lname=lname)
             gl = gp[0]
-            gl.add_plot(ws_z, 1, 0, type="l")    # 零参考线
-            gl.add_plot(ws_ci, 1, 0, type="l")   # 置信区间横线（NaN 断段）
-            gl.add_plot(ws, 0, 1, type="s")      # 效应量点（y=序号, x=效应量）
+            gl.add_plot(ws_z, 1, 0, type="l")    # 零参考线（plot 1）
+            gl.add_plot(ws_ci, 1, 0, type="l")   # CI 横线（plot 2）
+            gl.add_plot(ws, 0, 1, type="s")      # 效应量点（plot 3）
             gl.rescale()
             short = gp.obj.GetName()
+            # X 下限向左扩 18% 给研究名标签腾位
+            lo_all = [v for v in ci_lo_f if np.isfinite(v)]
+            hi_all = [v for v in ci_hi_f if np.isfinite(v)]
+            xmin = min(lo_all + [zero]) if lo_all else zero
+            xmax = max(hi_all + [zero]) if hi_all else zero
+            span = max(xmax - xmin, 1e-9)
+            x_new = xmin - 0.18 * span
+            try:
+                gl.axis("x").sfrom = float(x_new)
+            except Exception:
+                pass
+            # 研究名逐行标注（labels 此前只显示第一个的修复）
+            label_x = x_new + 0.02 * span
+            n_label = 0
+            for i, lab in enumerate(labels):
+                try:
+                    gl.add_label(str(lab), float(label_x), float(i + 1))
+                    n_label += 1
+                except Exception:
+                    continue
+            # 图例只保留效应量行（plot 3），CI/零线不进图例
+            try:
+                _ensure_active_graph(short)
+                op.po.LT_execute('legend.text$ = "\\l(3) effect";')
+            except Exception:
+                pass
             style = _apply_style_impl(short, plot_type="scatter",
-                                      columns=labels, style_mode=style_mode,
-                                      family=family, x_title="Effect size")
+                                      columns=["effect"], style_mode=style_mode,
+                                      family=family, x_title="Effect size",
+                                      apply_axis_titles=True)
             r = oerr.ok(graph=short, template=t, labels=labels, zero=zero,
+                        labels_placed=n_label,
                         style=style,
-                        detail=f"forest 完成：{n} 项研究（点+CI 线+零参考线），"
-                               f"研究标签见返回 labels 与工作表 -> {short}")
+                        detail=f"forest 完成：{n} 项研究（点 + CI 线 + 零参考线，"
+                               f"图例仅含效应量行），{n_label} 个研究名逐行标注"
+                               f" -> {short}")
         elif t == "multi_panel":
             panels = {str(k): _flist(v) for k, v in data["panels"].items()}
             names = list(panels)
@@ -2627,15 +2860,33 @@ def _plot_template_impl(template_id, data, graph_name=None, title=None,
                 except Exception:
                     break
             drawn = min(len(layers), len(names))
+            # P0 修复（2026-09-16 c23 教训）：add_layer 默认把新层放在与第 0 层
+            # 相同的位置（三面板完全重叠）。这里按层纵向均分 %页几何，
+            # 层间留 3% 间隙；标题区另留 8%。
+            geo_mp = []
+            if drawn > 1:
+                top0, total_h, gap = 8.0, 86.0, 3.0
+                h_each = (total_h - gap * (drawn - 1)) / drawn
+                for i, gli in enumerate(layers):
+                    t_i = top0 + i * (h_each + gap)
+                    geo_mp += _set_layer_geometry(gli, left=14.0, top=t_i,
+                                                  width=80.0, height=h_each)
+            import origin_edit as _oedit
             for i in range(drawn):
                 gli = layers[i]
                 nm = names[i]
                 gli.add_plot(wsobj, col_of[nm], 0, type="l")
                 gli.rescale()
-                try:
-                    gli.axis("y").title = nm
-                except Exception:
-                    pass
+                _oedit.set_axis_title_checked(gli, "y", nm, po=op.po)
+                if i == drawn - 1:
+                    _oedit.set_axis_title_checked(
+                        gli, "x", x_title or "X", po=op.po)
+                else:
+                    try:   # 上方面板隐藏 X 刻度，避免拥挤（与 xrd 同策略）
+                        gli.set_int("x.showAxes", 0)
+                        gli.axis("x").title = ""
+                    except Exception:
+                        pass
             short = gp.obj.GetName()
             if drawn < len(names):
                 return oerr.fail(
@@ -2646,9 +2897,12 @@ def _plot_template_impl(template_id, data, graph_name=None, title=None,
                     workaround="分多次调用 origin_plot（每面板一张图），"
                                "或改用 stacked_spectra")
             style = _apply_style_impl(short, plot_type="line", columns=names,
-                                      style_mode=style_mode, family=family)
+                                      style_mode=style_mode, family=family,
+                                      apply_axis_titles=False)
             r = oerr.ok(graph=short, template=t, panels=names, style=style,
-                        detail=f"multi_panel 完成：{drawn} 个面板 -> {short}")
+                        geometry=geo_mp,
+                        detail=f"multi_panel 完成：{drawn} 个面板（纵向堆叠，"
+                               f"层间已去重叠）-> {short}")
         else:  # 防御分支（理论上已被 _validate_template_data 拦截）
             return oerr.fail("invalid_request", f"未知 template_id: {template_id!r}")
 
@@ -2921,9 +3175,9 @@ def filter_data(worksheet, drop_rows=None, x_column=0, x_min=None, x_max=None):
 
 @_synchronized
 def fit(worksheet, x_column, y_column, kind="linear", plot_curve=True,
-        graph=None, title=None):
+        graph=None, title=None, drop_report_pages=True):
     return _fit_impl(worksheet, x_column, y_column, kind=kind, plot_curve=plot_curve,
-                     graph=graph, title=title)
+                     graph=graph, title=title, drop_report_pages=drop_report_pages)
 
 
 @_synchronized
@@ -2940,14 +3194,16 @@ def stats(worksheet, columns=None):
 
 @_synchronized
 def transform(worksheet, column, op="smooth", window=5, method="moving",
-              new_x=None, write_back=True):
+              new_x=None, write_back=True, return_values=True):
     return _transform_impl(worksheet, column, op=op, window=window, method=method,
-                           new_x=new_x, write_back=write_back)
+                           new_x=new_x, write_back=write_back,
+                           return_values=return_values)
 
 
 @_synchronized
-def integrate(worksheet, x_column=0, y_column=1):
-    return _integrate_impl(worksheet, x_column=x_column, y_column=y_column)
+def integrate(worksheet, x_column=0, y_column=1, baseline=None):
+    return _integrate_impl(worksheet, x_column=x_column, y_column=y_column,
+                           baseline=baseline)
 
 
 @_synchronized
@@ -2971,9 +3227,9 @@ def peak_find(worksheet, x_column=0, y_column=1, min_height=None, min_distance=1
 
 @_synchronized
 def histogram(worksheet, column=0, bins=10, plot=False, file_path=None,
-              fmt="png", width=1200):
+              fmt="png", width=1200, color=None):
     return _histogram_impl(worksheet, column=column, bins=bins, plot=plot,
-                           file_path=file_path, fmt=fmt, width=width)
+                           file_path=file_path, fmt=fmt, width=width, color=color)
 
 
 @_synchronized
@@ -3062,22 +3318,25 @@ def export_delivery(graph, source_path=None, output_dir=None, fmts="png,pdf",
 @_synchronized
 def verify_graph(graph=None, expected_x_title=None, expected_y_title=None,
                  min_font_pt=None, expected_series=None, legend_visible=None,
-                 files=None):
+                 files=None, allow_full_overlap=False):
     return _verify_graph_impl(graph=graph, expected_x_title=expected_x_title,
                               expected_y_title=expected_y_title,
                               min_font_pt=min_font_pt,
                               expected_series=expected_series,
-                              legend_visible=legend_visible, files=files)
+                              legend_visible=legend_visible, files=files,
+                              allow_full_overlap=allow_full_overlap)
 
 
 @_synchronized
 def plot_template(template_id, data, graph_name=None, title=None,
                   style_mode="default", family=None, offset="auto",
-                  reverse_x=False, fmt=None, file_path=None, width=1200):
+                  reverse_x=False, fmt=None, file_path=None, width=1200,
+                  x_title=None, y_title=None, gradient=False):
     return _plot_template_impl(template_id, data, graph_name=graph_name,
                                title=title, style_mode=style_mode, family=family,
                                offset=offset, reverse_x=reverse_x, fmt=fmt,
-                               file_path=file_path, width=width)
+                               file_path=file_path, width=width,
+                               x_title=x_title, y_title=y_title, gradient=gradient)
 
 
 @_synchronized

@@ -40,6 +40,12 @@ const repoRoot = dirname(here);
 const SERVER = process.env.ORIGIN_SERVER
   ?? join(repoRoot, 'origin_mcp_server.py');
 const VENV_PY = process.env.ORIGIN_VENV_PY
+  ?? [
+    join(homedir(), 'dsh_origin_plugin', '.venv', 'Scripts', 'python.exe'),
+    join(dirname(dirname(fileURLToPath(import.meta.url))),
+         '..', '_chem_venv', 'Scripts', 'python.exe'),
+    join(repoRoot, '.venv', 'Scripts', 'python.exe'),
+  ].find(existsSync)
   ?? join(homedir(), 'dsh_origin_plugin', '.venv', 'Scripts', 'python.exe');
 
 const SDK = findSdk();

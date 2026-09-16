@@ -1,0 +1,820 @@
+{
+ "results": [
+  {
+   "case": "c01_beer_lambert",
+   "tier": "A",
+   "desc": "UV-Vis 标准曲线+线性拟合",
+   "ok": true,
+   "summary": "graph=Graph26 斜率=0.425357 R2参数=['slope', 'slope_error', 'intercept', 'intercept_error'] verify_passed=True export=True",
+   "problems": [],
+   "tool_calls": 7,
+   "tool_ok": 7,
+   "seconds": 9.5
+  },
+  {
+   "case": "c02_first_order",
+   "tier": "A",
+   "desc": "一级反应动力学 ln[A]-t",
+   "ok": true,
+   "summary": "k_fit=0.00419 (真值 0.0042), ln通道=有",
+   "problems": [],
+   "tool_calls": 5,
+   "tool_ok": 5,
+   "seconds": 7.9
+  },
+  {
+   "case": "c03_arrhenius",
+   "tier": "A",
+   "desc": "Arrhenius 活化能",
+   "ok": true,
+   "summary": "Ea_fit=52000 J/mol (真值 52000), params=['slope', 'slope_error', 'intercept', 'intercept_error', 'note']",
+   "problems": [],
+   "tool_calls": 3,
+   "tool_ok": 3,
+   "seconds": 7.7
+  },
+  {
+   "case": "c04_titration",
+   "tier": "A",
+   "desc": "酸碱滴定曲线+一阶导",
+   "ok": true,
+   "summary": "deriv=ok graph=A",
+   "problems": [],
+   "tool_calls": 4,
+   "tool_ok": 4,
+   "seconds": 1.2
+  },
+  {
+   "case": "c05_ideal_vdw",
+   "tier": "A",
+   "desc": "理想气体 vs 范德华",
+   "ok": true,
+   "summary": "graph=Graph57 verify=True",
+   "problems": [],
+   "tool_calls": 5,
+   "tool_ok": 5,
+   "seconds": 1.5
+  },
+  {
+   "case": "c06_solubility",
+   "tier": "A",
+   "desc": "KNO3 溶解度曲线",
+   "ok": true,
+   "summary": "fit=True params_keys=['slope', 'slope_error', 'intercept', 'intercept_error', 'note']",
+   "problems": [],
+   "tool_calls": 3,
+   "tool_ok": 3,
+   "seconds": 8.0
+  },
+  {
+   "case": "c07_buffer",
+   "tier": "A",
+   "desc": "H-H 缓冲液 pH",
+   "ok": true,
+   "summary": "add_text=True graph=Graph60",
+   "problems": [],
+   "tool_calls": 3,
+   "tool_ok": 3,
+   "seconds": 0.9
+  },
+  {
+   "case": "c08_phase_tx",
+   "tier": "A",
+   "desc": "双组分 T-x 相图",
+   "ok": true,
+   "summary": "graph=A3 verify=True",
+   "problems": [],
+   "tool_calls": 7,
+   "tool_ok": 7,
+   "seconds": 1.8
+  },
+  {
+   "case": "c09_uvvis_series",
+   "tier": "B",
+   "desc": "浓度系列 UV-Vis 堆叠谱",
+   "ok": true,
+   "summary": "graph=Graph61 verify=True issues=[]",
+   "problems": [],
+   "tool_calls": 2,
+   "tool_ok": 2,
+   "seconds": 1.7
+  },
+  {
+   "case": "c10_xrd_rietveld",
+   "tier": "B",
+   "desc": "XRD Rietveld 三件套",
+   "ok": true,
+   "summary": "graph=Graph62 layers=2 verify_passed=True verify_checks=12",
+   "problems": [],
+   "tool_calls": 3,
+   "tool_ok": 3,
+   "seconds": 3.5
+  },
+  {
+   "case": "c11_ftir_delta",
+   "tier": "B",
+   "desc": "FTIR 反应前后对比",
+   "ok": true,
+   "summary": "graph=Graph63 (FTIR x 轴应 4000→400 反向)",
+   "problems": [],
+   "tool_calls": 6,
+   "tool_ok": 6,
+   "seconds": 1.5
+  },
+  {
+   "case": "c12_fluorescence",
+   "tier": "B",
+   "desc": "荧光激发/发射双谱",
+   "ok": true,
+   "summary": "graph=Graph64 ok=True (NaN 拼接双谱尝试)",
+   "problems": [],
+   "tool_calls": 1,
+   "tool_ok": 1,
+   "seconds": 1.1
+  },
+  {
+   "case": "c13_tga_dtg",
+   "tier": "B",
+   "desc": "TGA/DTG 热重",
+   "ok": true,
+   "summary": "deriv=True graph=Graph65",
+   "problems": [],
+   "tool_calls": 3,
+   "tool_ok": 3,
+   "seconds": 1.6
+  },
+  {
+   "case": "c14_dsc",
+   "tier": "B",
+   "desc": "DSC 熔融峰:找峰+积分",
+   "ok": true,
+   "summary": "peaks=1 area=712.2554999999999",
+   "problems": [],
+   "tool_calls": 4,
+   "tool_ok": 4,
+   "seconds": 1.1
+  },
+  {
+   "case": "c15_cv",
+   "tier": "B",
+   "desc": "循环伏安 CV",
+   "ok": true,
+   "summary": "graph=Graph67",
+   "problems": [],
+   "tool_calls": 4,
+   "tool_ok": 4,
+   "seconds": 1.1
+  },
+  {
+   "case": "c16_particle",
+   "tier": "B",
+   "desc": "纳米粒径分布直方图",
+   "ok": true,
+   "summary": "hist=True mean=37.5905 count=220",
+   "problems": [],
+   "tool_calls": 3,
+   "tool_ok": 3,
+   "seconds": 1.5
+  },
+  {
+   "case": "c17_kinetics_compare",
+   "tier": "B",
+   "desc": "一级 vs 二级反应对比",
+   "ok": true,
+   "summary": "fit1=True (二级动力学需 1/[A] 变换，又无 ln/reciprocal 算子)",
+   "problems": [],
+   "tool_calls": 3,
+   "tool_ok": 3,
+   "seconds": 8.8
+  },
+  {
+   "case": "c18_catalyst_arrhenius",
+   "tier": "C",
+   "desc": "多催化剂 Arrhenius+t检验",
+   "ok": true,
+   "summary": "graph=Graph70 verify=True ttest=True (Ea 排序应 Pt<C<Ru<Pd... 视觉可查斜率)",
+   "problems": [],
+   "tool_calls": 6,
+   "tool_ok": 6,
+   "seconds": 2.6
+  },
+  {
+   "case": "c19_bet",
+   "tier": "C",
+   "desc": "BET 吸附回滞环+虚线编辑",
+   "ok": true,
+   "summary": "graph=Graph71 verify=True",
+   "problems": [],
+   "tool_calls": 7,
+   "tool_ok": 7,
+   "seconds": 2.0
+  },
+  {
+   "case": "c20_insitu_xrd",
+   "tier": "C",
+   "desc": "原位 XRD 温度系列",
+   "ok": true,
+   "summary": "graph=Graph72 ok=True",
+   "problems": [],
+   "tool_calls": 1,
+   "tool_ok": 1,
+   "seconds": 1.7
+  },
+  {
+   "case": "c21_stability",
+   "tier": "C",
+   "desc": "电池长循环 dual_y+次轴",
+   "ok": true,
+   "summary": "graph=Graph73 verify=True (y2 次轴范围编辑)",
+   "problems": [],
+   "tool_calls": 3,
+   "tool_ok": 3,
+   "seconds": 1.6
+  },
+  {
+   "case": "c22_kie",
+   "tier": "C",
+   "desc": "KIE 同位素效应拟合",
+   "ok": true,
+   "summary": "kie_fit=16.84 vs 真值 16.84 (298K, Ea差 7kJ/mol)",
+   "problems": [],
+   "tool_calls": 5,
+   "tool_ok": 5,
+   "seconds": 19.7
+  },
+  {
+   "case": "c23_dft_dos",
+   "tier": "C",
+   "desc": "DFT PDOS 多面板",
+   "ok": true,
+   "summary": "graph=Graph77 verify=True",
+   "problems": [],
+   "tool_calls": 3,
+   "tool_ok": 3,
+   "seconds": 2.6
+  },
+  {
+   "case": "c24_michaelis_menten",
+   "tier": "C",
+   "desc": "Michaelis-Menten 非线性拟合",
+   "ok": true,
+   "summary": "MM拟合ok=True params=['Vmax', 'd_Vmax', 'Km', 'd_Km', 'EC10', 'edp_EC10']",
+   "problems": [],
+   "tool_calls": 3,
+   "tool_ok": 3,
+   "seconds": 10.7
+  },
+  {
+   "case": "c25_yield_forest",
+   "tier": "C",
+   "desc": "催化剂筛选森林图",
+   "ok": true,
+   "summary": "graph=Graph80 ok=True",
+   "problems": [],
+   "tool_calls": 1,
+   "tool_ok": 1,
+   "seconds": 2.4
+  },
+  {
+   "case": "c26_response_surface",
+   "tier": "C",
+   "desc": "响应面 3D",
+   "ok": true,
+   "summary": "ok=True graph=SurfPlot1 (120 点响应面，行=x 自动转置)",
+   "problems": [],
+   "tool_calls": 1,
+   "tool_ok": 1,
+   "seconds": 0.9
+  },
+  {
+   "case": "zz_cleanup",
+   "tier": "-",
+   "desc": "窗口清理",
+   "ok": true,
+   "summary": "清理剩余 63 页未关（批上限）",
+   "problems": [],
+   "tool_calls": 0,
+   "tool_ok": 0,
+   "seconds": 0
+  }
+ ],
+ "tool_log": [
+  {
+   "tool": "status",
+   "ok": true,
+   "ms": 702
+  },
+  {
+   "tool": "list_pages(前)",
+   "ok": true,
+   "ms": 7652
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 607
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 822
+  },
+  {
+   "tool": "fit",
+   "ok": true,
+   "ms": 7023
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 200
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 193
+  },
+  {
+   "tool": "verify_graph",
+   "ok": true,
+   "ms": 320
+  },
+  {
+   "tool": "export",
+   "ok": true,
+   "ms": 289
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 337
+  },
+  {
+   "tool": "transform(ln)",
+   "ok": true,
+   "ms": 209
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 298
+  },
+  {
+   "tool": "fit",
+   "ok": true,
+   "ms": 6646
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 419
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 352
+  },
+  {
+   "tool": "fit",
+   "ok": true,
+   "ms": 6921
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 471
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 359
+  },
+  {
+   "tool": "transform(derivative)",
+   "ok": true,
+   "ms": 178
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 438
+  },
+  {
+   "tool": "export",
+   "ok": true,
+   "ms": 182
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 442
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 482
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 170
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 163
+  },
+  {
+   "tool": "verify_graph",
+   "ok": true,
+   "ms": 227
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 341
+  },
+  {
+   "tool": "fit",
+   "ok": true,
+   "ms": 7243
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 415
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 342
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 413
+  },
+  {
+   "tool": "add_text",
+   "ok": true,
+   "ms": 143
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 370
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 441
+  },
+  {
+   "tool": "edit_plot",
+   "ok": true,
+   "ms": 238
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 163
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 155
+  },
+  {
+   "tool": "add_text",
+   "ok": true,
+   "ms": 152
+  },
+  {
+   "tool": "verify_graph",
+   "ok": true,
+   "ms": 245
+  },
+  {
+   "tool": "plot_template(stacked_spectra)",
+   "ok": true,
+   "ms": 1354
+  },
+  {
+   "tool": "verify_graph",
+   "ok": true,
+   "ms": 300
+  },
+  {
+   "tool": "plot_template(xrd_pattern)",
+   "ok": true,
+   "ms": 2531
+  },
+  {
+   "tool": "inspect_graph",
+   "ok": true,
+   "ms": 682
+  },
+  {
+   "tool": "verify_graph",
+   "ok": true,
+   "ms": 317
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 385
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 489
+  },
+  {
+   "tool": "edit_plot",
+   "ok": true,
+   "ms": 183
+  },
+  {
+   "tool": "add_text",
+   "ok": true,
+   "ms": 155
+  },
+  {
+   "tool": "add_text",
+   "ok": true,
+   "ms": 161
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 155
+  },
+  {
+   "tool": "plot_template(dual_y)",
+   "ok": true,
+   "ms": 1078
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 328
+  },
+  {
+   "tool": "transform(derivative)",
+   "ok": true,
+   "ms": 159
+  },
+  {
+   "tool": "plot_template(dual_y)",
+   "ok": true,
+   "ms": 1147
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 427
+  },
+  {
+   "tool": "peak_find",
+   "ok": true,
+   "ms": 137
+  },
+  {
+   "tool": "integrate",
+   "ok": true,
+   "ms": 135
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 436
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 363
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 437
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 166
+  },
+  {
+   "tool": "add_text",
+   "ok": true,
+   "ms": 166
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 403
+  },
+  {
+   "tool": "histogram",
+   "ok": true,
+   "ms": 880
+  },
+  {
+   "tool": "stats",
+   "ok": true,
+   "ms": 195
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 411
+  },
+  {
+   "tool": "fit1",
+   "ok": true,
+   "ms": 7815
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 546
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 487
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 784
+  },
+  {
+   "tool": "inspect_graph",
+   "ok": true,
+   "ms": 582
+  },
+  {
+   "tool": "edit_plot",
+   "ok": true,
+   "ms": 274
+  },
+  {
+   "tool": "verify_graph",
+   "ok": true,
+   "ms": 309
+  },
+  {
+   "tool": "ttest",
+   "ok": true,
+   "ms": 141
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 443
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 509
+  },
+  {
+   "tool": "edit_plot",
+   "ok": true,
+   "ms": 218
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 171
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 179
+  },
+  {
+   "tool": "add_text",
+   "ok": true,
+   "ms": 162
+  },
+  {
+   "tool": "verify_graph",
+   "ok": true,
+   "ms": 266
+  },
+  {
+   "tool": "plot_template(stacked_spectra)",
+   "ok": true,
+   "ms": 1694
+  },
+  {
+   "tool": "plot_template(dual_y)",
+   "ok": true,
+   "ms": 1191
+  },
+  {
+   "tool": "verify_graph",
+   "ok": true,
+   "ms": 335
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 119
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 426
+  },
+  {
+   "tool": "fit(kH)",
+   "ok": true,
+   "ms": 8986
+  },
+  {
+   "tool": "fit(kD)",
+   "ok": true,
+   "ms": 9416
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 629
+  },
+  {
+   "tool": "edit_legend",
+   "ok": true,
+   "ms": 204
+  },
+  {
+   "tool": "plot_template(multi_panel)",
+   "ok": true,
+   "ms": 2068
+  },
+  {
+   "tool": "verify_graph",
+   "ok": true,
+   "ms": 395
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 169
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 402
+  },
+  {
+   "tool": "fit(MM)",
+   "ok": true,
+   "ms": 9759
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 514
+  },
+  {
+   "tool": "plot_template(forest)",
+   "ok": true,
+   "ms": 2407
+  },
+  {
+   "tool": "plot3d",
+   "ok": true,
+   "ms": 873
+  },
+  {
+   "tool": "save_project",
+   "ok": true,
+   "ms": 457
+  },
+  {
+   "tool": "list_pages(后)",
+   "ok": true,
+   "ms": 9672
+  },
+  {
+   "tool": "manage_pages(close 清理)",
+   "ok": true,
+   "ms": 86492
+  },
+  {
+   "tool": "manage_pages(close 清理2)",
+   "ok": true,
+   "ms": 98228
+  }
+ ],
+ "summary": {
+  "cases_ok": 27,
+  "cases_total": 27,
+  "tools_ok": 102,
+  "tools_total": 102,
+  "problems_total": 0
+ }
+}

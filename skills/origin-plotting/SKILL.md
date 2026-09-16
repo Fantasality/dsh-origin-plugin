@@ -1,10 +1,10 @@
 ---
 name: origin-plotting
-description: Origin 全流程 SOP（v2.2.1，43 工具按步骤挂载）：检查环境 → inspect 现状 → 规划（新建/编辑）→ 执行 → verify 校验（只有 fail 必须修）→ 失败恢复 → 交付。含意图→工具速查、错误码→动作映射、领域模板、细粒度改图、通道纪律。
+description: Origin 全流程 SOP（v2.2.2，43 工具按步骤挂载）：检查环境 → inspect 现状 → 规划（新建/编辑）→ 执行 → verify 校验（只有 fail 必须修）→ 失败恢复 → 交付。含意图→工具速查、错误码→动作映射、领域模板、细粒度改图、通道纪律。
 whenToUse: 用户要求用 Origin 画图、导入数据、拟合/FFT/统计分析、领域模板（谱图堆叠/XRD/双Y/森林/多面板）、导出交付 OPJU，或对已画好的图做微调（换某条线颜色/加粗/隐藏、改轴范围、挪图例、调页面尺寸、关掉多余窗口）时
 ---
 
-# Origin SOP v2.2.1（决策流驱动；工具挂在步骤下，按序调用）
+# Origin SOP v2.2.2（决策流驱动；工具挂在步骤下，按序调用）
 
 ## 主循环（先看这张图，再往下读）
 
@@ -40,7 +40,7 @@ whenToUse: 用户要求用 Origin 画图、导入数据、拟合/FFT/统计分�
 用户说"这条线/这个轴/图例/页面"时，先拿现状：
 - `origin_inspect_graph(graph)` → 每图层几何、每条曲线（索引/颜色/线型/符号）、轴范围与字号、图例、页面尺寸（cm+dots+dpi）；
   用户说"第 2 条线" → `plot` 索引 = **1**（0 起）；颜色先用 inspect 确认，避免改错条。
-- `origin_list_pages()` → 全部页面短名 + 当前活动窗口（关窗/激活/重命名都用这里的短名）；
+- `origin_list_pages()` → 全部页面（**对象数组，含 name/type**，取 `name` 字段当短名）+ 当前活动窗口（关窗/激活/重命名都用这里的短名）；
   用户只说"刚才那张图"没给名 → `origin_list_graphs()` 列图页短名确认是哪张。
 - 不确定图长什么样 → `origin_view_graph(graph)` 自己看图再决定改什么。
 
@@ -61,6 +61,12 @@ whenToUse: 用户要求用 Origin 画图、导入数据、拟合/FFT/统计分�
 | 已有工作表，画 2D | `origin_plot(worksheet, ...)`，含 line/symbol/line_symbol/box/bar |
 | 领域图（谱图堆叠/XRD/双Y/森林/多面板） | `origin_plot_template(template_id, data, ...)`，模板见附录 A |
 | 3D 表面/散点、等高线、直方图 | `origin_plot3d` / `origin_plot_contour` / `origin_histogram` |
+
+`origin_plot3d` 的 data 格式（两种 surface 写法都自动识别行列方向）：
+- 隐式网格 `{"z": [[...],[...]]}`（自动生成 X/Y 索引）——最稳；
+- 显式网格 `{"x":[...], "y":[...], "z":[[...],...]}`：z 的行对应 y、列对应 x；
+  AI 直觉的"行=x"写法也会自动转置，形状不匹配时返回友好报错（含期望形状）；
+- 3D 散点 `{"x":[...],"y":[...],"z":[...]}` 三等长一维列表。
 
 最快路径示例（记住这个参数组合，可直接抄）：
 ```json
@@ -127,6 +133,7 @@ whenToUse: 用户要求用 Origin 画图、导入数据、拟合/FFT/统计分�
 | `worksheet_not_found` / `column_not_found` | 引用错 | `origin_list_sheets` + `origin_read_worksheet` 重建引用 |
 | `origin_busy_user_session` | 用户在手动操作 | 等 5s 重试 ≤3 次 → 告知用户 |
 | 读回值是 `NaN` | LabTalk 静默失败（通道在当前图/版本无效） | **不要重试同一通道**；换 `origin_edit_*` 的 COM 通道，或 `origin_view_graph` 目视确认 |
+| `layer_overlap:*` 检查 fail/warn | 图层 bbox 重叠（部分重叠=fail；完全重叠=warn） | 多面板布局损坏 → 重建；双 Y 类共享绘图区属正常 → verify 传 `allow_full_overlap=true` |
 
 同一问题修复 2 轮仍 fail：停止重试，如实向用户报告已做/未做 + `origin_view_graph` 渲染图给用户决策。
 
@@ -138,19 +145,36 @@ whenToUse: 用户要求用 Origin 画图、导入数据、拟合/FFT/统计分�
 - 最终回复 = 交付文件路径 + verify 结论一句话（warn 一并告知）。
 
 ## 附录 A 领域模板（origin_plot_template）
+所有模板都支持 `x_title` / `y_title` 覆盖轴标题（多系列 y 轴不再自动猜标题，
+不传时模板用内置默认）；`stacked_spectra` 另支持 `gradient=true`（系列渐变色，
+温度/浓度序列一目了然）。
 | template_id | 用途 | data 要点 |
 |---|---|---|
 | `stacked_spectra` | 多谱线纵向堆叠偏移（XPS/UV-Vis/PL/FTIR） | `{"x":[..], "spectra":{"名":[..]}}`，`offset="auto"`, `reverse_x` |
-| `xrd_pattern` | XRD 三件套（双层：上层 Observed 散点+Calculated 满量程，下层 Difference 独立量程+零线+相刻线，X 轴严格对齐） | `{"two_theta":[..],"observed":[..],"calculated":[..],"difference":[..]?,"phases":{"相":[2θ..]}?}` |
-| `dual_y` | 双 Y 轴 | `{"x":[..],"left":[..],"right":[..],"left_name","right_name"}` |
-| `forest` | 森林图（效应量+CI+零参考线） | `{"labels":[..],"effect":[..],"ci_low":[..],"ci_high":[..]}` |
-| `multi_panel` | 多面板纵向堆叠 | `{"x":[..]?,"panels":{"面板名":[..]}}` |
+| `xrd_pattern` | XRD 三件套（双层：上层 Observed 小散点+Calculated 满量程，下层 Difference 独立量程+零线+**红色加粗相刻线**，X 轴严格对齐） | `{"two_theta":[..],"observed":[..],"calculated":[..],"difference":[..]?,"phases":{"相":[2θ..]}?}` |
+| `dual_y` | 双 Y 轴（左右轴标题走写后读回验证通道） | `{"x":[..],"left":[..],"right":[..],"left_name","right_name"}`；verify 时传 `allow_full_overlap=true` |
+| `forest` | 森林图（效应量+CI+零参考线；CI/零线不进图例，研究名逐行标注） | `{"labels":[..],"effect":[..],"ci_low":[..],"ci_high":[..]}` |
+| `multi_panel` | 多面板纵向堆叠（图层几何自动均分去重叠） | `{"x":[..]?,"panels":{"面板名":[..]}}` |
 
-## 附录 B 只要数字（不建图，结果直接回复用户）
-`origin_fit`（拟合，可上图）、`origin_stats`、`origin_transform`（smooth/normalize/derivative/interpolate）、
-`origin_integrate`、`origin_fft`、`origin_correlate`、`origin_peak_find`、`origin_filter_data`（删点写回工作表）、
-`origin_ttest` / `origin_anova` / `origin_pca` / `origin_survival`（统计批，纯 numpy）。
-需要后续上图时用 `origin_plot` 返回 `graph` 再走 STEP 5。
+## 附录 B 分析工具（结果直接回复用户；需要图时走 STEP 5）
+- **变换** `origin_transform(worksheet, column, op, ...)`：op 现有
+  smooth / normalize / derivative / interpolate / **ln / log10 / reciprocal /
+  exp / sqrt / abs**（动力学 ln[A]、Arrhenius 1/T、二级 1/[A] 直接用，不用自己算）；
+  结果 ≤2000 点时回传 `values` 数组，**可直接喂 plot_template**（如 TGA+DTG 双 Y：
+  transform(derivative) 拿 values → plot_template dual_y，不用 read_worksheet）；
+  对数/倒数对 0/负数会产出无效点，返回里 `invalid_points` 提示先用 filter_data 清洗。
+- **拟合** `origin_fit(..., kind=...)`：linear 之外可用 Origin 内置 NLFit 名——
+  `ExpDec1 / ExpGrow1 / Gauss / Lorentz / Boltzmann / DoseResp /
+  MichaelisMenten / Logistic / Poly2`（返回值带 `supported_kinds` 清单）。
+  默认自动关闭 NLFit 的 FitLine*/Residual* 报告副产品页（`removed_report_pages`
+  记录清单），不会再爆窗口。
+- **积分** `origin_integrate(..., baseline=...)`：baseline 可传 `"min"`/`"first"`
+  或数值——DSC 焓变等需要扣基线的场景用。
+- 其余：`origin_stats`、`origin_correlate`、`origin_fft`、`origin_peak_find`、
+  `origin_filter_data`（删点写回）、`origin_histogram(..., color="#RRGGBB")`、
+  `origin_ttest` / `origin_anova` / `origin_pca` / `origin_survival`。
+- **窗口清理**：`origin_manage_pages("closeAll")` 一键关闭项目内全部页面
+  （会话结束恢复干净状态用；返回 removed 清单）。
 
 ## 附录 C 通道纪律（排障时读；这是"必须用 edit 工具、别绕 LabTalk"的原因）
 - **COM 作用域通道永远可靠**（与哪个窗口活动无关）：`plot_list`、`axis` 对象、`p.color`、`set_int` 几何。

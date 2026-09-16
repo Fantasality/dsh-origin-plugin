@@ -295,11 +295,23 @@ def infer_axis_title(column_names: Sequence[str]) -> Dict:
                     "reason": f"列名语义 {names[0]!r} 匹配特例 {key}"}
 
     # 4) 通用：主干 + 单位
+    # 多系列且主干互不相同（如 k_Pt_C / k_Ru_C / inv_T 之类的"一列一义"）：
+    # 从单列名推断共用 y 标题必然失真（实测 k_Pt_C -> "K pt"），返回空交由调用方
+    # 或用户显式指定（style_overrides.y_title / edit_axis）。
+    distinct_bases = {b for b in base_candidates if b}
+    top_count = counter.most_common(1)[0][1] if counter else 0
+    if len(names) > 1 and len(distinct_bases) > 1 and top_count <= 1:
+        return {"title": "", "unit": "", "base": "", "used_names": names,
+                "reason": (f"{len(names)} 个系列主干互不相同"
+                           f"（{sorted(distinct_bases)[:3]}...），不做 y 标题推断")}
     unit_part = f" ({unit})" if unit else ""
-    title_out = (base or names[0].replace("_", " ")).strip().capitalize()
+    base_out = (base or names[0].replace("_", " ")).strip()
+    # 仅首字符大写，保留其余大小写（capitalize 会把 "mAh/g" 压成 "mah/g"）
+    title_out = base_out[:1].upper() + base_out[1:] if base_out else base_out
     # 若所有列同主干，直接用它
-    if len({b for b in base_candidates if b}) == 1 and base:
-        title_out = base.replace("_", " ").strip().capitalize()
+    if len(distinct_bases) == 1 and base:
+        b = base.replace("_", " ").strip()
+        title_out = b[:1].upper() + b[1:] if b else b
     return {"title": f"{title_out}{unit_part}", "unit": unit, "base": base or title_out,
             "used_names": names, "reason": f"启发式：主干={base!r}, 单位={unit!r}"}
 

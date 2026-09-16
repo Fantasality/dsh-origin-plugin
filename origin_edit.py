@@ -144,6 +144,49 @@ def lt_exec(po, script):
     return err
 
 
+def set_axis_title_checked(gl, axis, text, po=None):
+    """写轴标题并读回验证；读回不匹配时换通道重试（LabTalk 转义 / 对偶轴）。
+
+    背景（probe_title 实证）：COM `gl.axis(ax).title = txt` 对 "(%)"、"2θ"、"mAh/g"
+    在普通图上读写均正确，但双 Y 模板（doubley）的可见右轴可能是 layer2.y2 而非
+    layer2.y，且样式流程可能覆盖标题 —— 必须读回验证，不匹配就换通道重写。
+
+    返回 {"ok": bool, "readback": str|None, "channel": str}
+    """
+    text = str(text)
+    try:
+        gl.axis(axis).title = text
+    except Exception:
+        pass
+    readback = None
+    try:
+        readback = gl.axis(axis).title
+    except Exception:
+        readback = None
+    if isinstance(readback, str) and readback.strip() == text.strip():
+        return {"ok": True, "readback": readback, "channel": f"COM:{axis}"}
+
+    # 重试 1：LabTalk 直写（% 转义为 %%，" 转义为 \"）
+    if po is not None:
+        esc = text.replace("%", "%%").replace('"', '\\"')
+        _, e1 = _safe(po.LT_execute, f'layer.{axis}.title$ = "{esc}";')
+        if e1 is None:
+            _, r2 = _safe(lambda: gl.axis(axis).title)
+            if isinstance(r2, str) and r2.strip() == text.strip():
+                return {"ok": True, "readback": r2, "channel": f"LabTalk:{axis}"}
+
+    # 重试 2：对偶轴（双 Y 模板可见右轴常为 y2）
+    for cand in (("y2", "y") if axis == "y" else ("x2", "x")):
+        try:
+            gl.axis(cand).title = text
+            rb = gl.axis(cand).title
+            if isinstance(rb, str) and rb.strip() == text.strip():
+                return {"ok": True, "readback": rb, "channel": f"COM:{cand}"}
+        except Exception:
+            continue
+    return {"ok": False, "readback": readback, "channel": "failed"}
+
+
 # ---------------------------------------------------------------------------
 # 页面枚举 / 图页巡检
 # ---------------------------------------------------------------------------
@@ -740,14 +783,38 @@ def edit_page(op, po, graph, page_size_cm=None, background=None, layer=None,
 # 窗口管理（关闭多个窗口正是新手高频需求）
 # ---------------------------------------------------------------------------
 def manage_pages(op, po, action, pages=None, new_name=None):
-    """action: close | activate | rename | hide | show | duplicate
+    """action: close | closeAll | activate | rename | hide | show | duplicate
 
     pages: 短名列表（来自 origin_list_pages）。close 支持 "Book*"/"Graph*" 通配。
+    closeAll（2026-09-16 补齐）：关闭项目内全部页面（会话产物一键清理），
+    不需要 pages 参数；会逐页复核并在返回里报告关闭清单。
     """
     action = (action or "").lower()
-    if action not in ("close", "activate", "rename", "hide", "show", "duplicate"):
+    if action not in ("close", "closeall", "activate", "rename", "hide", "show",
+                      "duplicate"):
         return oerr.fail("invalid_request",
-                         f"action 必须是 close/activate/rename/hide/show/duplicate，收到 {action!r}")
+                         "action 必须是 close/closeAll/activate/rename/hide/show/"
+                         f"duplicate，收到 {action!r}")
+    if action == "closeall":
+        total, _ = _safe(lambda: op.po.Pages.Count)
+        targets = []
+        for i in range(int(total or 0)):
+            pg, _ = _safe(op.po.Pages, i)
+            nm, _ = _safe(pg.GetName) if pg is not None else (None, None)
+            if nm:
+                targets.append(str(nm))
+        removed = []
+        for t in targets:
+            e = lt_exec(po, f"window -c {t};")
+            if e is None:
+                removed.append(t)
+        left = 0
+        total2, _ = _safe(lambda: op.po.Pages.Count)
+        left = int(total2 or 0)
+        return oerr.ok(action="closeAll", removed=removed,
+                       n_removed=len(removed), pages_left=left,
+                       detail=f"closeAll: 关闭 {len(removed)}/{len(targets)} 页，"
+                              f"剩余 {left} 页")
     targets = [str(p) for p in (pages or [])]
     if not targets:
         return oerr.fail("invalid_request", "pages 不能为空（先用 origin_list_pages 取短名）")
