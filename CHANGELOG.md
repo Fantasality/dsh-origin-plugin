@@ -1,5 +1,37 @@
 # Changelog
 
+## 2.6.0 (2026-09-16)
+
+**P2 生态批次**（ROADMAP #P2 八项全落地；62 工具 / 30 错误码）。
+
+### 分发与测试
+- **pyproject.toml**：`pip install .` 本地构建可用（PyPI publish 待指令）；
+  requirements 对齐（新增 pyyaml/Pillow/matplotlib/python-pptx）；
+- **pytest 化**（来源 leima-max）：`tests/test_offline.py`（错误码表/门禁
+  tokenizer/白名单/FigureSpec 闭环/PLAN_STALE/目录一致性，无 Origin 可跑）
+  + `tests/test_live.py`（Origin-aware skip，无 Origin64.exe 自动跳过）；
+- **双语 README**：README.en.md 英文精简版（中文为准）。
+
+### 功能
+- **EPS 导出**：fmt 白名单 + `%!PS` 文件头校验（探针实证 21921B 产物）；
+- **matplotlib 桥**（来源 jsbangsund）：`origin_import_matplotlib(pickle)`
+  反序列化 Figure → 逐 Line2D 提取数据/颜色/线宽/符号 → 建图；
+  X 并集线性插值对齐；实测颜色/符号映射生效、verify passed；
+- **PPT 组图交付**（来源 hzsci）：`origin_export_pptx` 高清 PNG 嵌入
+  python-pptx 页 + 面板字母 + 来源注记；真 OLE 双击编辑路径未打通
+  （Origin50.Graph OLE 类已确认存在，COMPATIBILITY #16 如实记录）；
+- **Gallery 模板搜索**：`origin_template_search` Graph Gallery 搜索/
+  .zip 下载（浏览器 UA；结构变化/403 如实报告不猜）。
+
+### 安全
+- **文件访问白名单**（来源 Ge-Shun）：`DSH_ORIGIN_ALLOWED_ROOTS`（分号
+  分隔前缀）约束 load/export/save/delivery 路径，越界返回 `path_not_allowed`。
+
+### 修复
+- **PLAN_STALE 时序缺陷**：`_newer_same_signature` 依赖 LRU 顺序，
+  get_plan 的 touch 会重排顺序漏报陈旧计划 → 改用创建序号 `_seq` 比较
+  （pytest 实测暴露并修复）。
+
 ## 2.5.0 (2026-09-16)
 
 **P1 协议与能力批次**（ROADMAP #P1 五项；59 工具）。

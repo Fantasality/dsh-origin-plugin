@@ -90,6 +90,9 @@ TOOL_CATALOG = [
     {"name": "origin_execute_plan", "group": "规划与确认", "desc": "按 plan_id 执行计划（写数+画图+导出）"},
     {"name": "origin_spec_export", "group": "规划与确认", "desc": "把 plan 导出为 FigureSpec YAML（可 diff/可重放/可版本化）"},
     {"name": "origin_spec_import", "group": "规划与确认", "desc": "读取 FigureSpec YAML 重建计划（spec 先行→确认→执行的声明式路径）"},
+    {"name": "origin_import_matplotlib", "group": "数据", "desc": "导入 matplotlib Figure pickle（提取曲线数据与颜色/线宽/符号映射）"},
+    {"name": "origin_export_pptx", "group": "交付与验证", "desc": "图导出高清 PNG 并组 PowerPoint 页（面板字母+来源注记，论文组图）"},
+    {"name": "origin_template_search", "group": "连接与诊断", "desc": "搜索/下载 OriginLab Graph Gallery 官方模板（.zip，页面结构变化时如实报告）"},
     # plot / export
     {"name": "origin_plot", "group": "画图", "desc": "基于工作表画图（含 histogram/box/bar，可传 style_mode/family/style_overrides）"},
     {"name": "origin_plot_file", "group": "画图", "desc": "一键 写数+画图+导出（最常用）"},
@@ -449,6 +452,52 @@ def origin_spec_import(path: str) -> dict:
     origin_plot_plan 重建。
     """
     return engine.spec_import(path)
+
+
+@mcp.tool()
+def origin_import_matplotlib(pickle_path: str, graph_name: str = "",
+                             title: str = "") -> dict:
+    """导入 matplotlib Figure pickle 为 Origin 图（提取每条 Line2D 的数据、
+    颜色、线宽、符号并映射）。
+
+    生成 pickle：在 matplotlib 侧 `pickle.dump(fig, open('fig.pickle','wb'))`
+    （同版本 matplotlib 可靠）。各线 X 不同时按并集线性插值对齐。
+    """
+    return engine.import_matplotlib(pickle_path, graph_name=graph_name or None,
+                                    title=title or None)
+
+
+@mcp.tool()
+def origin_export_pptx(graph: str, file_path: str, width: int = 2400,
+                       title: str = "", panel_label: str = "",
+                       notes: str = "") -> dict:
+    """图导出高分辨率 PNG 并组装 PowerPoint 页（论文组图交付）。
+
+    Args:
+        graph: 图页短名。
+        file_path: 输出 .pptx 绝对路径（同目录同时保留 PNG）。
+        width: PNG 像素宽（默认 2400，印刷级）。
+        panel_label: 面板字母（如 "a"；hzsci 约定字母放 PPT 不进 Origin）。
+        title/notes: 页脚标题与来源注记。
+    """
+    return engine.export_pptx(graph, file_path, width=width,
+                              title=title or None,
+                              panel_label=panel_label or None,
+                              notes=notes or None)
+
+
+@mcp.tool()
+def origin_template_search(keyword: str, max_items: int = 5,
+                           download_dir: str = "") -> dict:
+    """搜索 OriginLab Graph Gallery 官方模板（可选下载 .zip；离线可调）。
+
+    Args:
+        keyword: 搜索关键词（如 "box chart"、"bullet chart"）。
+        max_items: 最多处理条数（1-20）。
+        download_dir: 给定则逐个解析详情页并下载 .zip 到该目录。
+    """
+    return engine.template_search(keyword, max_items=max_items,
+                                  download_dir=download_dir or None)
 
 
 @mcp.tool()

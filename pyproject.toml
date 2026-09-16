@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dsh-origin-plugin"
+version = "2.6.0"
+description = "DSH Origin Plugin: drive Origin scientific plotting from AI chat via MCP (60 tools; works standalone via stdio)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Fantasality" }]
+keywords = ["origin", "originpro", "mcp", "scientific-plotting", "automation"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
+dependencies = [
+    "originpro",
+    "pywin32",
+    "numpy",
+    "openpyxl",
+    "pyyaml",
+    "Pillow",
+    "matplotlib",
+    "python-pptx",
+]
+
+[project.scripts]
+dsh-origin-mcp = "origin_mcp_stdio:main"
+
+[project.urls]
+Homepage = "https://github.com/Fantasality/dsh-origin-plugin"
+
+[tool.setuptools]
+py-modules = [
+    "origin_engine", "origin_edit", "origin_errors", "origin_fileio",
+    "origin_analysis", "origin_verify", "origin_matrix", "origin_mcp_server",
+    "origin_mcp_stdio", "origin_plan", "origin_bridge", "origin_spec",
+    "origin_gallery", "plot_style", "install",
+]
+include-package-data = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -78,7 +78,7 @@ try {
   const tools = await client.listTools();
   const names = tools.tools.map((t) => t.name).sort();
   console.log(`TOOLS(${names.length}):`, names.join(', '));
-  if (names.length < 59) throw new Error(`工具数 ${names.length} < 59`);
+  if (names.length < 62) throw new Error(`工具数 ${names.length} < 62`);
   for (const must of ['origin_plot_file', 'origin_plot_plan', 'origin_execute_plan',
     'origin_plot_template', 'origin_verify_graph', 'origin_load_file',
     'origin_save_project', 'origin_export_delivery',
@@ -88,7 +88,9 @@ try {
     'origin_diagnose', 'origin_cookbook',
     'origin_release', 'origin_reconnect', 'origin_manage_plots',
     'origin_manage_data', 'origin_matrix_write', 'origin_matrix_read',
-    'origin_matrix_plot', 'origin_spec_export', 'origin_spec_import']) {
+    'origin_matrix_plot', 'origin_spec_export', 'origin_spec_import',
+    'origin_import_matplotlib', 'origin_export_pptx',
+    'origin_template_search']) {
     if (!names.includes(must)) throw new Error(`缺少 ${must}`);
   }
 

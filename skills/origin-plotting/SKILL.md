@@ -249,6 +249,7 @@ whenToUse: 用户要求用 Origin 画图、导入数据、拟合/FFT/统计分�
 | `ORIGIN_IPC_LOCK` | 关 | `1`=跨进程命名互斥体（多 DSH 实例共用一个 Origin 时防踩踏） |
 | `DSH_ORIGIN_DISPATCH_TIMEOUT` | 90 | COM 调用软超时秒数；超时后看门狗自动点掉 Origin 模态对话框（OK/取消类），仍卡死则按 `DSH_ORIGIN_AUTOKILL` 策略处置并返回 `com_blocked_by_dialog` |
 | `DSH_ORIGIN_WATCHDOG_GRACE` | 15 | 看门狗点击对话框后的额外等待秒数 |
+| `DSH_ORIGIN_ALLOWED_ROOTS` | 未设（不限） | 文件访问白名单（分号分隔目录前缀）：load/export/save/delivery 的路径必须落在其中，否则 `path_not_allowed` |
 
 - 逃生舱：`origin_labtalk`（任意 LabTalk 执行，带激活+读回+NaN 防护+**破坏命令门禁**：delete/doc -s/exit/win -c 需 `confirm=true`）——只在 edit 工具覆盖不到的场景用。
 - 其它：`origin_status.capabilities.known_risks` 是本机版本坑清单（如 plotxy 在 2026b 的 box/bar 已走官方模板规避）。

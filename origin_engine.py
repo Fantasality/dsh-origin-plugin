@@ -1006,8 +1006,36 @@ def _y_columns_impl(wks, x_column):
 # ---------------------------------------------------------------------------
 # 导出
 # ---------------------------------------------------------------------------
+# --- P2-8（2026-09-16）：文件访问白名单（安全场景限制可读写的目录前缀） ---
+def _path_allowed(path):
+    """DSH_ORIGIN_ALLOWED_ROOTS 未设=不限制；设置后 path 必须落在前缀内。
+
+    多个前缀用分号分隔；大小写与斜杠方向不敏感（Windows 语义）。
+    """
+    roots = os.environ.get("DSH_ORIGIN_ALLOWED_ROOTS", "").strip()
+    if not roots or not path:
+        return True
+    p = os.path.abspath(str(path)).lower().replace("/", "\\")
+    for r in re.split(r"[;,]", roots):
+        r2 = os.path.abspath(r.strip()).lower().replace("/", "\\")
+        if r2 and (p == r2 or p.startswith(r2 + "\\")):
+            return True
+    return False
+
+
+def _path_guard(path, what="路径"):
+    """白名单检查：放行返回 None，否则返回 fail(path_not_allowed)。"""
+    if not _path_allowed(path):
+        return oerr.fail(
+            "path_not_allowed",
+            f"{what} {path!r} 不在 DSH_ORIGIN_ALLOWED_ROOTS 白名单内",
+            path=str(path),
+            hint="让用户调整白名单（分号分隔多个目录前缀）或把文件移入允许目录")
+    return None
+
+
 def _file_valid_for(path, fmt):
-    """导出产物有效性：存在、非空；png/pdf 再校验文件头（防假成功）。"""
+    """导出产物有效性：存在、非空；png/pdf/eps 再校验文件头（防假成功）。"""
     try:
         if not path or not os.path.exists(path):
             return False
@@ -1018,6 +1046,8 @@ def _file_valid_for(path, fmt):
         if fmt == "png" and not head.startswith(b"\x89PNG"):
             return False
         if fmt == "pdf" and not head.startswith(b"%PDF"):
+            return False
+        if fmt == "eps" and not head.startswith(b"%!PS"):
             return False
         return True
     except Exception:
@@ -1066,9 +1096,9 @@ def _export_impl(graph, file_path=None, fmt="png", width=1200, output_dir=None):
         fmt = (fmt or "png").lower().lstrip(".")
         if fmt == "tiff":
             fmt = "tif"
-        if fmt not in ("png", "svg", "pdf", "tif", "emf"):
+        if fmt not in ("png", "svg", "pdf", "tif", "emf", "eps"):
             return oerr.fail("invalid_request",
-                             f"fmt 只支持 png/svg/pdf/tif/emf，收到 {fmt!r}")
+                             f"fmt 只支持 png/svg/pdf/tif/emf/eps，收到 {fmt!r}")
 
         gp = op.find_graph(graph)
         if not gp:
@@ -1076,11 +1106,17 @@ def _export_impl(graph, file_path=None, fmt="png", width=1200, output_dir=None):
 
         if file_path:
             file_path = os.path.abspath(file_path)
+            _g = _path_guard(file_path, "导出路径")
+            if _g is not None:
+                return _g
             ext = os.path.splitext(file_path)[1].lstrip(".").lower()
             if ext and ext != fmt:
                 fmt = ext
         else:
             out_dir = os.path.abspath(output_dir or DEFAULT_OUTPUT_DIR)
+            _g = _path_guard(out_dir, "导出目录")
+            if _g is not None:
+                return _g
             os.makedirs(out_dir, exist_ok=True)
             base = re.sub(r"[^\w\-.]", "_", str(graph).replace(" ", "_"))
             file_path = os.path.join(out_dir, f"{base}.{fmt}")
@@ -3582,6 +3618,9 @@ def _cookbook_impl(scenario=""):
 # ---------------------------------------------------------------------------
 def _load_file_impl(path, worksheet=None, sheet=None, max_preview_rows=5):
     try:
+        _g = _path_guard(path, "导入路径")
+        if _g is not None:
+            return _g
         import origin_fileio as fio
         r = fio.read_table(path, sheet=sheet)
         if not r.get("ok"):
@@ -3626,6 +3665,9 @@ def _save_project_impl(path):
                 hint="请在 Origin 窗口按 Ctrl+S 手动保存当前项目；"
                      "如需恢复自动保存，取消该环境变量后重试")
         path = os.path.abspath(str(path))
+        _g = _path_guard(path, "保存路径")
+        if _g is not None:
+            return _g
         if not path.lower().endswith((".opju", ".ogg", ".opj")):
             path += ".opju"
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -3676,16 +3718,19 @@ def _export_delivery_impl(graph, source_path=None, output_dir=None, fmts="png,pd
         fmt_list = [f.strip().lower().lstrip(".") for f in str(fmts).split(",")
                     if f.strip()]
         fmt_list = ["tif" if f == "tiff" else f for f in fmt_list]
-        bad = [f for f in fmt_list if f not in ("png", "svg", "pdf", "tif", "emf")]
+        bad = [f for f in fmt_list if f not in ("png", "svg", "pdf", "tif", "emf", "eps")]
         if bad:
             return oerr.fail("invalid_request", f"不支持的导出格式: {bad}",
-                             supported=["png", "svg", "pdf", "tif", "emf"])
+                             supported=["png", "svg", "pdf", "tif", "emf", "eps"])
         gp = op_find_graph(graph)
         if not gp:
             return oerr.fail("graph_not_found", f"图不存在: {graph}", graph=str(graph))
         ts = time.strftime("%Y%m%d_%H%M%S")
         if source_path:
             src = os.path.abspath(str(source_path))
+            _g = _path_guard(src, "交付源路径")
+            if _g is not None:
+                return _g
             stem = re.sub(r"[^\w\-.]", "_",
                           os.path.splitext(os.path.basename(src))[0])
             ddir = os.path.join(os.path.dirname(src), f"{stem}_Origin_{ts}")
@@ -4997,6 +5042,38 @@ def spec_validate(spec):
     """P1-1：离线校验 spec 结构（不落盘不连 Origin）。"""
     import origin_spec as _os
     return _os.spec_validate(spec)
+
+
+# --- P2-6/P2-7（2026-09-16）：matplotlib 桥 + PPT 组图交付 ---
+@_synchronized
+def import_matplotlib(pickle_path, graph_name=None, title=None):
+    """P2-6：导入 matplotlib Figure pickle（提取 Line2D 数据+样式映射画图）。"""
+    ok, conn = _connect_impl()
+    if not ok:
+        return conn
+    import origin_bridge as _ob
+    return _ob.import_matplotlib_impl(_origin_app, pickle_path,
+                                      graph_name=graph_name, title=title)
+
+
+@_synchronized
+def export_pptx(graph, file_path, width=2400, title=None,
+                panel_label=None, notes=None):
+    """P2-7：图导出高清 PNG 并组 PowerPoint 页（面板字母+来源注记）。"""
+    ok, conn = _connect_impl()
+    if not ok:
+        return conn
+    import origin_bridge as _ob
+    return _ob.export_pptx_impl(_origin_app, graph, file_path, width=width,
+                                title=title, panel_label=panel_label,
+                                notes=notes)
+
+
+def template_search(keyword, max_items=5, download_dir=None):
+    """P2-5：搜索/下载 OriginLab Graph Gallery 模板（离线可调；网络失败如实报告）。"""
+    import origin_gallery as _og
+    return _og.search_impl(keyword, max_items=max_items,
+                           download_dir=download_dir)
 
 
 @_synchronized

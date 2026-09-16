@@ -174,6 +174,11 @@ CODE_META: Dict[str, tuple] = {
         ["脚本包含破坏性命令（delete / doc -s / exit 等），默认拦截",
          "确认无误后带 confirm=true 重发；或改用等价的非破坏命令"],
     ),
+    "path_not_allowed": (
+        False,
+        ["路径不在 DSH_ORIGIN_ALLOWED_ROOTS 白名单内（安全策略拦截）",
+         "让用户调整白名单环境变量（分号分隔多个前缀），或把文件移入允许目录"],
+    ),
 }
 
 VALID_CODES = frozenset(CODE_META)
@@ -320,6 +325,11 @@ RECOVERY_MAP: Dict[str, Dict[str, Any]] = {
         "policy": RECOVERY_POLICY_FIX,
         "diagnose": ["检查脚本是否确需破坏性命令",
                      "确认后带 confirm=true 重发 origin_labtalk"],
+    },
+    "path_not_allowed": {
+        "policy": RECOVERY_POLICY_NO,
+        "diagnose": ["检查 DSH_ORIGIN_ALLOWED_ROOTS 白名单设置",
+                     "把文件移入允许目录或请用户扩白名单"],
     },
 }
 

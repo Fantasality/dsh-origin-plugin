@@ -36,6 +36,7 @@ import plot_style as pst
 
 PLAN_CACHE: "OrderedDict[str, dict]" = OrderedDict()
 PLAN_CACHE_MAX = 32
+_SEQ = [0]          # 创建序号（LRU touch 会重排 cache 顺序，时序比较用 _seq）
 
 _X_NAME_HINTS = ("x", "time", "temp", "t_", "two_theta", "2theta", "wavelength",
                  "energy", "wave_number", "frequency", "date", "age", "dose",
@@ -208,10 +209,12 @@ def build_plan(columns, plot_type="line", style_mode="default", family=None,
               "x_column": x_column, "y_columns": list(y_final),
               "yerr_column": yerr_pick}
     plan_id = _plan_hash(clean, params)
+    _SEQ[0] += 1
     plan = {
         "ok": True,
         "plan_id": plan_id,
         "plan_hash": plan_id,
+        "_seq": _SEQ[0],
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "columns_meta": metas,
         "roles": {"x": suggested_x, "y": y_final, "yerr": yerr_pick,
@@ -247,17 +250,25 @@ def _plan_signature(plan):
 
 
 def _newer_same_signature(plan):
-    """缓存中是否存在同签名、更晚生成的计划（数据/映射变过 => 旧计划陈旧）。"""
+    """缓存中是否存在同签名、更晚生成的计划（数据/映射变过 => 旧计划陈旧）。
+
+    时序比较用创建序号 _seq——PLAN_CACHE 是 LRU（get_plan 会 touch 重排），
+    dict 顺序不代表创建顺序（2026-09-16 pytest 实测暴露）。
+    """
     sig = _plan_signature(plan)
-    keys = list(PLAN_CACHE.keys())
-    try:
-        idx = keys.index(plan["plan_id"])
-    except ValueError:
-        return None
-    for k in keys[idx + 1:]:
-        other = PLAN_CACHE.get(k)
-        if other is not None and _plan_signature(other) == sig:
-            return {"newer_plan_id": k, "newer_created_at": other.get("created_at")}
+    my_seq = plan.get("_seq", 0)
+    best = None
+    for k, other in PLAN_CACHE.items():
+        if k == plan["plan_id"] or other is None:
+            continue
+        if _plan_signature(other) != sig:
+            continue
+        if other.get("_seq", 0) > my_seq:
+            if best is None or other.get("_seq", 0) > best.get("_seq", 0):
+                best = other
+    if best is not None:
+        return {"newer_plan_id": best["plan_id"],
+                "newer_created_at": best.get("created_at")}
     return None
 
 
