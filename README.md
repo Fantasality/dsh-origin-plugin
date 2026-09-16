@@ -3,6 +3,8 @@
 **国内可用 · DSH 生态 · MCP 桥接通用** —— 让 AI 对话直接驱动本机 **OriginLab Origin** 自动画图、分析、交付。
 纯本机 COM 通道：**数据不出本机、无外网依赖、秒级响应**（对比需要外网的远程 Origin 服务（如 EditaPlot 类），国内访问不稳定且数据要上传第三方；本插件用你已装的正版 Origin，没有网络与隐私问题）。
 
+[English version here](README.en.md)
+
 > **定位一句话**：本插件的产出是 **Origin 工程文件（OPJU）+ 可复现配置**——每一条线、
    每个标记、每处轴样式都能在 Origin 里继续手动微调，三个月后按 FigureSpec YAML 一键复现。
    文生图/文生 SVG 路线（AutoFigure 类）产出的是一次性矢量对象，编辑粒度和科研可复现性不在同一层。
