@@ -43,7 +43,7 @@ _EXTENDED = os.environ.get("ORIGIN_MCP_PROFILE", "full").lower() != "compact"
 
 mcp = MCPServer(
     name="origin",
-    version="2.2.0",
+    version="2.2.1",
     instructions=(
         "Origin 科学绘图工具（连接本机 Origin 自动化服务器）。"
         "画图/分析前先调用 origin_help 或 origin_catalog 获取速查（秒回）。"
@@ -1459,6 +1459,6 @@ if __name__ == "__main__":
     elif arg == "--concurrency-test":
         _concurrency_test()
     elif arg == "--json-echo":  # 供外部快速探测
-        print(json.dumps({"server": "origin", "ok": True, "version": "2.2.0"}))
+        print(json.dumps({"server": "origin", "ok": True, "version": "2.2.1"}))
     else:
         _sync_stdio_server()

@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.2.1 (2026-09-16)
+
+**skill 重构：工具参考手册 → 决策流 SOP**（代码零改动，工具数不变仍为 43）。
+"AI 不怕工具多，怕没有策略"——工具越多搜索空间越大，越需要工作流约束。
+
+- 以端到端工作流为骨架：主循环决策图 + 七步（检查环境 → inspect → 规划 →
+  执行（4A 粗粒度建图 / 4B 细粒度编辑）→ verify 校验 → 失败恢复 → 交付），
+  43 个工具全部挂载到对应决策点，AI 按序调用而非在工具目录里搜索；
+- 完成判据显式化：verify 只有 fail 必须修；同一问题 2 轮修复仍 fail 即停止
+  重试、如实报告并渲染图给用户决策（防死循环式"假成功"）；
+- 失败恢复表：error_code / NaN 读回 / 窗口激活失败 → 唯一确定动作；
+- 细粒度编辑五态 status（applied / applied_adjusted / applied_unverified /
+  rejected / unsupported）逐态判读表；通道纪律降级为排障附录；
+- 一致性校验：SKILL 提及的工具名与 TOOL_CATALOG 逐一比对，零幽灵零遗漏
+  （修复 v2.2 文档漏挂的 `origin_list_graphs`）；同步修正 package.json
+  description 中过期的 "35 tools" 表述。
 
 ## 2.2.0 (2026-09-15)
 
