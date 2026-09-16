@@ -1,5 +1,45 @@
 # Changelog
 
+## 2.5.0 (2026-09-16)
+
+**P1 协议与能力批次**（ROADMAP #P1 五项；59 工具）。
+
+### FigureSpec 声明式图协议（来源 deliuou + editaplot）
+- `origin_spec_export`：把 plan 导出为四节 YAML spec（data 内联完整数据/
+  plot/style/export）——可 diff、可重放、可版本化；同 spec 重导入得到同一
+  plan_id（内容哈希闭环实测）；
+- `origin_spec_import`：读 YAML spec 重建计划，复用现有 questions 确认流与
+  check_stale 防陈旧机制，不发明第二套确认流；
+- "spec 先行 → 用户确认 → 再执行"写入 SKILL。
+
+### MCP Resources 只读会话快照（来源 garethbeaumo）
+- stdio 服务器新增 `resources/list` + `resources/read`（capabilities 已声明）：
+  `origin://session`（全项目快照）/ `origin://worksheets` / `origin://graphs` /
+  `origin://worksheet/[Book]Sheet`——AI 不改项目即可 inspect；工具面不受影响。
+
+### 矩阵工具集（来源 youngminsw + 官方 Python-Samples）
+- `origin_matrix_write`（from_np 自动 resize + 写回一致性复核）/
+  `origin_matrix_read`（2D 列表）/ `origin_matrix_plot`（surface/scatter/
+  contour/contour_fill/3d_wire，读矩阵后复用现有已验证绘图路径）；
+- 探针实证：heatmap 的 LabTalk `plotm` 全变体静默失败 → 明确拒绝
+  （COMPATIBILITY #14），不冒充支持。
+
+### 参考图安全借鉴（来源 editaplot + hzsci）
+- SKILL 新增 4A+ 节：用户给参考图时产出"图形简报"（只提取布局/家族/线型/
+  配色/图例等图形语法），映射到 family/style_overrides/edit_legend；
+- **硬性红线**：禁止像素反推数据、不复制文字/标注/Logo、不承诺 1:1 复刻。
+
+### 验证图视觉基准（来源 editaplot）
+- 新增 `smoke/visual_diff.py`：12 张代表性产物基准（sha256 + dHash 感知哈希），
+  `--capture` 入库 / `--check` 对比，汉明距离 >14/64 报差异——堵住数值断言
+  漏掉的外观回归（图例换行类问题的自动化防线）。
+
+### 修复
+- **COM 线程死锁**：`origin_matrix_plot` 在 COM 线程内误调 `@_synchronized`
+  公开函数（二次投递队列自等待）→ 改调裸 impl；看门狗 105s 超时机制首次
+  实战捕获该死锁并给出明确错误；
+- MBook.lname 为空（originpro 缺陷）→ 引用改用 `obj.GetName()`。
+
 ## 2.4.0 (2026-09-16)
 
 **P0 稳健性批次**（ROADMAP #P0 五项；54 工具 / 29 错误码）。

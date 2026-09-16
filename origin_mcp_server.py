@@ -88,6 +88,8 @@ TOOL_CATALOG = [
     # plan / confirm
     {"name": "origin_plot_plan", "group": "规划与确认", "desc": "绘图计划（离线秒回）：逐列画像+角色建议+待确认问题 -> plan_id"},
     {"name": "origin_execute_plan", "group": "规划与确认", "desc": "按 plan_id 执行计划（写数+画图+导出）"},
+    {"name": "origin_spec_export", "group": "规划与确认", "desc": "把 plan 导出为 FigureSpec YAML（可 diff/可重放/可版本化）"},
+    {"name": "origin_spec_import", "group": "规划与确认", "desc": "读取 FigureSpec YAML 重建计划（spec 先行→确认→执行的声明式路径）"},
     # plot / export
     {"name": "origin_plot", "group": "画图", "desc": "基于工作表画图（含 histogram/box/bar，可传 style_mode/family/style_overrides）"},
     {"name": "origin_plot_file", "group": "画图", "desc": "一键 写数+画图+导出（最常用）"},
@@ -123,6 +125,9 @@ TOOL_CATALOG = [
     {"name": "origin_filter_data", "group": "数据编辑", "desc": "删除/裁剪数据点（写回原工作表）"},
     {"name": "origin_manage_plots", "group": "细粒度编辑", "desc": "数据图管理：remove 删曲线 / change_data 换数据源"},
     {"name": "origin_manage_data", "group": "数据编辑", "desc": "工作表数据管理：sort 按列排序整表 / transpose 行列转置（新表）"},
+    {"name": "origin_matrix_write", "group": "数据编辑", "desc": "写矩阵页（2D 网格；surface/contour 大数据复用）"},
+    {"name": "origin_matrix_read", "group": "数据编辑", "desc": "读矩阵数据（2D 列表 + shape）"},
+    {"name": "origin_matrix_plot", "group": "画图", "desc": "用已有矩阵绘图：surface/scatter/contour/contour_fill/3d_wire"},
     # fit / analysis
     {"name": "origin_fit", "group": "拟合与统计", "desc": "线性/非线性拟合（初值/固定参数/加权列，拟合曲线上图）"},
     {"name": "origin_stats", "group": "拟合与统计", "desc": "描述统计 count/mean/std/.../skew"},
@@ -394,6 +399,56 @@ def origin_manage_data(worksheet: str, action: str, col: str = "0",
         dec: sort 是否降序（默认升序）。
     """
     return engine.manage_data(worksheet, action, col=col, dec=dec)
+
+
+@mcp.tool()
+def origin_matrix_write(data: dict, matrix_name: str = "") -> dict:
+    """把二维数值网格写入矩阵页（surface/contour 等大数据可持久化复用）。
+
+    data 形如 {"z": [[行1..], [行2..], ...]} 或直接 [[..],..]；
+    from_np 自动 resize；返回 writeback_consistent 供复核。
+    """
+    return engine.matrix_write(data, matrix_name=matrix_name or None)
+
+
+@mcp.tool()
+def origin_matrix_read(matrix: str) -> dict:
+    """读取矩阵页数据（返回 2D 列表 + shape；矩阵引用如 [M001]M001）。"""
+    return engine.matrix_read(matrix)
+
+
+@mcp.tool()
+def origin_matrix_plot(matrix: str, plot_type: str = "surface", fmt: str = "",
+                       file_path: str = "", width: int = 1200,
+                       title: str = "") -> dict:
+    """用已有矩阵绘图：surface/scatter/contour/contour_fill/3d_wire。
+
+    heatmap 暂不支持（plotm 实测不可用，COMPATIBILITY #14）。
+    """
+    return engine.matrix_plot(matrix, plot_type=plot_type, fmt=fmt or None,
+                              file_path=file_path or None, width=width,
+                              title=title or None)
+
+
+@mcp.tool()
+def origin_spec_export(plan_id: str, path: str) -> dict:
+    """把已有绘图计划导出为 FigureSpec YAML 文件（可 diff/可重放/可版本化）。
+
+    spec 含 data（内联完整数据）/plot/style/export 四节；同 spec 重导入
+    得到同一 plan_id（内容哈希）。
+    """
+    return engine.spec_export(plan_id, path)
+
+
+@mcp.tool()
+def origin_spec_import(path: str) -> dict:
+    """读取 FigureSpec YAML 重建绘图计划（离线秒回）。
+
+    声明式路径：spec 先行 -> （有 questions 先经用户确认）-> origin_execute_plan。
+    spec.data 只有 data_ref（文件路径）时，先 origin_load_file 导入再用
+    origin_plot_plan 重建。
+    """
+    return engine.spec_import(path)
 
 
 @mcp.tool()
@@ -1587,6 +1642,35 @@ def _write_jsonrpc(resp):
         sys.stdout.flush()
 
 
+def _resource_read_impl(uri: str) -> dict:
+    """P1-2：MCP Resources 只读会话快照（不修改项目，只读）。"""
+    import origin_engine as _eng
+    if uri == "origin://session":
+        st = _eng.status()
+        pages = _eng.list_pages()
+        return {"ok": bool(st.get("ok")),
+                "status": {k: st.get(k) for k in
+                           ("connected", "user_files", "detail")},
+                "pages": pages.get("pages"),
+                "workbooks": pages.get("workbooks"),
+                "graphs": pages.get("graphs"),
+                "count": pages.get("count")}
+    if uri == "origin://worksheets":
+        return _eng.list_sheets()
+    if uri == "origin://graphs":
+        return _eng.list_graphs()
+    if uri.startswith("origin://worksheet/"):
+        ref = uri[len("origin://worksheet/"):]
+        if not ref:
+            return {"ok": False, "error": "URI 需要 [Book]Sheet 引用，"
+                    "如 origin://worksheet/[Book1]Sheet1"}
+        return _eng.read_worksheet(ref)
+    return {"ok": False, "error": f"未知资源 URI: {uri}",
+            "supported": ["origin://session", "origin://worksheets",
+                          "origin://graphs",
+                          "origin://worksheet/[Book]Sheet"]}
+
+
 def _sync_stdio_server():
     """纯同步 stdio JSON-RPC 服务器（MCP 协议兼容）。
 
@@ -1621,11 +1705,38 @@ def _sync_stdio_server():
             pv = client_pv if client_pv else _PROTO_FALLBACK
             _write_jsonrpc({"jsonrpc": "2.0", "id": msg_id, "result": {
                 "protocolVersion": pv,
-                "capabilities": {"tools": {"listChanged": False}},
+                "capabilities": {"tools": {"listChanged": False},
+                                 "resources": {"listChanged": False}},
                 "serverInfo": {"name": "origin", "version": "2.0.0"},
             }})
         elif method == "ping":
             _write_jsonrpc({"jsonrpc": "2.0", "id": msg_id, "result": {}})
+        elif method == "resources/list":
+            _write_jsonrpc({"jsonrpc": "2.0", "id": msg_id, "result": {
+                "resources": [
+                    {"uri": "origin://session",
+                     "name": "Origin 会话全量快照（只读）",
+                     "mimeType": "application/json"},
+                    {"uri": "origin://worksheets",
+                     "name": "工作簿/工作表列表（只读）",
+                     "mimeType": "application/json"},
+                    {"uri": "origin://graphs",
+                     "name": "图页列表（只读）",
+                     "mimeType": "application/json"},
+                    {"uri": "origin://worksheet/[Book]Sheet1",
+                     "name": "单个工作表列数据（只读；把 [Book]Sheet 换成实际引用）",
+                     "mimeType": "application/json"},
+                ]}})
+        elif method == "resources/read":
+            uri = params.get("uri", "") if isinstance(params, dict) else ""
+            try:
+                body = _resource_read_impl(uri)
+            except Exception as e:
+                body = {"ok": False, "error": str(e)}
+            _write_jsonrpc({"jsonrpc": "2.0", "id": msg_id, "result": {
+                "contents": [{"uri": uri, "mimeType": "application/json",
+                              "text": json.dumps(body, ensure_ascii=False,
+                                                 default=str)}]}})
         elif method == "tools/list":
             _write_jsonrpc({"jsonrpc": "2.0", "id": msg_id,
                             "result": {"tools": list(registry.values())}})

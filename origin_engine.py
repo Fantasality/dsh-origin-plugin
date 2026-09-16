@@ -4936,6 +4936,69 @@ def manage_data(worksheet, action, col=0, dec=False):
     return _manage_data_impl(worksheet, action, col=col, dec=dec)
 
 
+# --- P1-3（2026-09-16）：矩阵页读写与矩阵绘图 ---
+@_synchronized
+def matrix_write(data, matrix_name=None):
+    """P1-3：写矩阵页（{'z': 2D 网格} 或直接 2D 网格；from_np 自动 resize）。"""
+    ok, conn = _connect_impl()
+    if not ok:
+        return conn
+    import origin_matrix as _om
+    return _om.matrix_write_impl(_origin_app, data, matrix_name=matrix_name)
+
+
+@_synchronized
+def matrix_read(matrix):
+    """P1-3：读矩阵数据（2D 列表 + shape）。"""
+    ok, conn = _connect_impl()
+    if not ok:
+        return conn
+    import origin_matrix as _om
+    return _om.matrix_read_impl(_origin_app, matrix)
+
+
+@_synchronized
+def matrix_plot(matrix, plot_type="surface", fmt=None, file_path=None,
+                width=1200, title=None):
+    """P1-3：用已有矩阵绘图（surface/scatter/contour/contour_fill/3d_wire）。"""
+    ok, conn = _connect_impl()
+    if not ok:
+        return conn
+    import origin_matrix as _om
+    return _om.matrix_plot_impl(_origin_app, matrix, plot_type=plot_type,
+                                fmt=fmt, file_path=file_path, width=width,
+                                title=title)
+
+
+# --- P1-1（2026-09-16）：FigureSpec 声明式图协议（YAML 落盘/导入，离线秒回） ---
+def spec_export(plan_id, path):
+    """P1-1：把已有 plan 导出为 FigureSpec YAML（可 diff/可重放/可版本化）。"""
+    import origin_plan as oplan
+    import origin_spec as _os
+    plan = oplan.get_plan(plan_id)
+    if plan is None:
+        return oerr.fail(
+            "plan_not_found",
+            f"plan_id 不存在或已过期（服务端缓存容量 {oplan.PLAN_CACHE_MAX}）",
+            plan_id=str(plan_id)[:24])
+    return _os.spec_to_yaml(_os.spec_from_plan(plan), path)
+
+
+def spec_import(path):
+    """P1-1：读取 FigureSpec YAML 重建计划（进确认流，返回 plan_id/questions）。"""
+    import origin_spec as _os
+    spec, err = _os.spec_from_yaml(path)
+    if err is not None:
+        return err
+    return _os.spec_import(spec)
+
+
+def spec_validate(spec):
+    """P1-1：离线校验 spec 结构（不落盘不连 Origin）。"""
+    import origin_spec as _os
+    return _os.spec_validate(spec)
+
+
 @_synchronized
 def help():
     return _help_impl()
