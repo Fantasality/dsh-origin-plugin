@@ -3,9 +3,13 @@
 **国内可用 · DSH 生态 · MCP 桥接通用** —— 让 AI 对话直接驱动本机 **OriginLab Origin** 自动画图、分析、交付。
 纯本机 COM 通道：**数据不出本机、无外网依赖、秒级响应**（对比需要外网的远程 Origin 服务（如 EditaPlot 类），国内访问不稳定且数据要上传第三方；本插件用你已装的正版 Origin，没有网络与隐私问题）。
 
+> **定位一句话**：本插件的产出是 **Origin 工程文件（OPJU）+ 可复现配置**——每一条线、
+   每个标记、每处轴样式都能在 Origin 里继续手动微调，三个月后按 FigureSpec YAML 一键复现。
+   文生图/文生 SVG 路线（AutoFigure 类）产出的是一次性矢量对象，编辑粒度和科研可复现性不在同一层。
+
 - 🤖 对话触发：`「用 Origin 画 y=x² 折线图并导出 PNG」` → 模型自动调用工具 → 图片落盘
 - 🔌 **双形态接入**：DSH 内经官方 `@deepseek-ai/dsh-mcp-client` 桥接为原生工具；DSH 外经 **`origin_mcp_stdio.py`** 接入任何标准 MCP 客户端（Kimi Code / Cursor / Claude Desktop / WorkBuddy），或 `npx dsh-origin-plugin` 直接拉起
-- 🎨 **50 个工具**：2D 图 line/scatter/line_symbol/column/**histogram/box/bar** + 误差棒、3D、等高线、统计批
+- 🎨 **62 个工具**：2D 图 line/scatter/line_symbol/column/**histogram/box/bar** + 误差棒、3D、等高线、统计批、拟合参数级控制、矩阵工具、matplotlib 桥、PPT 组图
 - 📋 **计划确认流（防陈旧）**：`origin_plot_plan` 逐列画像+待确认问题+`plan_hash` → `origin_execute_plan`（数据/映射变了报 `plan_stale`，语义不明/发表级/多组对比强制走此流）
 - 🩺 **系统自检**：`origin_diagnose`——Origin 安装 / COM 注册 / 残留进程 / 导出目录权限，连不上先调它
 - 📖 **场景速查**：`origin_cookbook`——八场景调用链 + 高频工具推荐默认参数（离线秒回）
@@ -264,7 +268,7 @@ powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\dsh_origin_plugin\regist
 | `origin_peak_fit` | **多峰拟合**（Gauss/Lorentz 分峰） | `worksheet`, `x_column`, `y_column` |
 | `origin_labtalk` | 逃生舱：任意 LabTalk（带激活+读回+NaN 防护） | `script` |
 
-> 完整清单以 `origin_catalog` 为准（50 个工具，文档即实现永不脱节）。
+> 完整清单以 `origin_catalog` 为准（62 个工具，文档即实现永不脱节）。
 
 ## 已知失败场景（实测汇总）
 

@@ -3,10 +3,15 @@
 > Chinese README: see [README.md](README.md). English version below is a
 > condensed overview; the Chinese doc is authoritative.
 
-AI-driven OriginLab Origin plotting over MCP. 60 tools / 31 error codes,
+AI-driven OriginLab Origin plotting over MCP. 62 tools / 30 error codes,
 built around a workflow SOP (not a tool dump): environment → inspect → plan →
 execute → verify → recover → deliver, with AI image review and a visual
 regression baseline.
+
+> **Positioning in one line**: the deliverable is an **editable Origin project file (OPJU) plus a
+reproducible FigureSpec YAML** — every line, marker and axis property stays hand-tunable in Origin and
+reproducible months later. Text-to-figure / text-to-SVG routes (AutoFigure-like) emit one-off vector
+objects; editability granularity and scientific reproducibility are different levels.
 
 ## Why
 
