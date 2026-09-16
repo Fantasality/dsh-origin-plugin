@@ -144,16 +144,37 @@ def lt_exec(po, script):
     return err
 
 
-def set_axis_title_checked(gl, axis, text, po=None):
+def set_axis_title_checked(gl, axis, text, po=None, graph=None):
     """写轴标题并读回验证；读回不匹配时换通道重试（LabTalk 转义 / 对偶轴）。
 
-    背景（probe_title 实证）：COM `gl.axis(ax).title = txt` 对 "(%)"、"2θ"、"mAh/g"
-    在普通图上读写均正确，但双 Y 模板（doubley）的可见右轴可能是 layer2.y2 而非
-    layer2.y，且样式流程可能覆盖标题 —— 必须读回验证，不匹配就换通道重写。
+    背景（probe_title / ltcol_probe 实证）：
+    - COM `gl.axis(ax).title = txt` 对 "(%)"、"2θ"、"mAh/g" 在**活动**图上读写正确；
+      但若目标图**不是当前活动窗口**，写入可能静默丢失（读回仍是占位符 `%(?X)`）。
+    - 双 Y 模板（doubley）的可见右轴可能是 layer2.y2 而非 layer2.y。
+    - 样式流程可能覆盖标题。
+    → 所以传 graph（图页短名）时会先激活目标页再写，且必须读回验证。
 
     返回 {"ok": bool, "readback": str|None, "channel": str}
     """
     text = str(text)
+
+    # 自动反查所属图页（GLayer.GetParent() -> GraphPage；probe 实证）
+    if graph is None:
+        try:
+            _p = gl.obj.GetParent()
+            _pname = _p.GetName()
+            if _pname:
+                graph = str(_pname)
+        except Exception:
+            graph = None
+
+    # 先激活目标图页（轴属性写入的前提；不激活可能静默丢失，读回仍是 %(?X)）
+    if graph is not None and po is not None:
+        try:
+            _safe(po.LT_execute, f"win -a {graph};")
+        except Exception:
+            pass
+
     try:
         gl.axis(axis).title = text
     except Exception:
@@ -492,7 +513,10 @@ _AXIS_INT_PROPS = {"show_grids": "showgrids", "show_axes": "showAxes",
                    "reverse": "reverse", "label_bold": "label.bold",
                    "label_font_pt": "label.fsize", "label_type": "label.type",
                    "label_decimals": "label.decPlaces",
-                   "grid_major_type": "grid.majorType"}
+                   "grid_major_type": "grid.majorType",
+                   "minor_ticks": "minorticks"}
+# float 通道（2026-09-16 补齐：分度值规划，"轴量程和分度值"诉求）
+_AXIS_FLOAT_PROPS = {"major_increment": "inc"}
 
 
 def edit_axis(op, po, graph, axis="x", layer=0, title=None, from_=None, to=None,
@@ -536,17 +560,28 @@ def edit_axis(op, po, graph, axis="x", layer=0, title=None, from_=None, to=None,
         rec(f"{axis}.scale", scale, "applied" if back is not None else "rejected",
             readback=back, note="0=线性 1=线性(自动) 2=log10 3=ln ...")
     for key, val in props.items():
-        prop = _AXIS_INT_PROPS.get(key)
-        if prop is None:
-            rec(key, val, "unsupported",
-                note=f"不支持的轴属性；可用: {sorted(_AXIS_INT_PROPS)}")
-            continue
         if val is None:
             continue
-        _safe(lambda p=prop, v=val: gl.set_int(f"{axis}.{p}", int(v)))
-        back, _ = _safe(lambda p=prop: gl.get_int(f"{axis}.{p}"))
-        ok = back is not None and int(back) == int(val)
-        rec(f"{axis}.{prop}", val, "applied" if ok else "rejected", readback=back)
+        prop = _AXIS_INT_PROPS.get(key)
+        if prop is not None:
+            _safe(lambda p=prop, v=val: gl.set_int(f"{axis}.{p}", int(v)))
+            back, _ = _safe(lambda p=prop: gl.get_int(f"{axis}.{p}"))
+            ok = back is not None and int(back) == int(val)
+            rec(f"{axis}.{prop}", val, "applied" if ok else "rejected",
+                readback=back)
+            continue
+        fprop = _AXIS_FLOAT_PROPS.get(key)
+        if fprop is not None:
+            _safe(lambda p=fprop, v=val: gl.set_float(f"{axis}.{p}", float(v)))
+            back, _ = _safe(lambda p=fprop: gl.get_float(f"{axis}.{p}"))
+            ok = (back is not None
+                  and abs(float(back) - float(val)) < 1e-6)
+            rec(f"{axis}.{fprop}", val, "applied" if ok else "rejected",
+                readback=back)
+            continue
+        rec(key, val, "unsupported",
+            note=f"不支持的轴属性；可用: {sorted(_AXIS_INT_PROPS)} + "
+                 f"{sorted(_AXIS_FLOAT_PROPS)}")
 
     applied = [c for c in changes if c["status"] == "applied"]
     return oerr.ok(graph=short, axis=axis, changes=changes,

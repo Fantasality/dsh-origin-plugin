@@ -19,7 +19,9 @@ origin_engine 的稳定错误码框架（clean-room 设计）
 设计要点（非抄袭，独立实现）：
 - 错误码是稳定的字符串常量，客户端按它分支，不解析自由文本；
 - recoverable 语义：true = 修正输入后可安全重试；false = 环境/依赖问题，别盲目重试；
-- next_actions 给出模型可以直接照着做的恢复步骤，减少瞎试。
+- next_actions 给出模型可以直接照着做的恢复步骤，减少瞎试；
+- RECOVERY_MAP 是"错误码 -> 恢复动作"映射表（policy 重试策略 + diagnose 诊断动作），
+  fail() 自动把对应项内嵌到失败返回的 recovery 字段；recovery_info() 可单独查询。
 """
 from __future__ import annotations
 
@@ -103,6 +105,11 @@ CODE_META: Dict[str, tuple] = {
         ["plan_id 已失效（服务器重启或缓存淘汰），重新调用 origin_plot_plan 生成",
          "确认 plan_id 来自本次会话的 origin_plot_plan 返回值"],
     ),
+    "plan_stale": (
+        True,
+        ["数据或列映射在计划生成后发生了变化：重新 origin_plot_plan 生成新计划",
+         "确认新计划的 plan_hash 后再 origin_plot_execute"],
+    ),
     "template_unavailable": (
         True,
         ["查看 detail 中缺失的模板/图层能力说明",
@@ -124,9 +131,185 @@ CODE_META: Dict[str, tuple] = {
         ["用 origin_inspect_graph 查看图层数与索引（0 起始）",
          "确认 layer 参数后重试"],
     ),
+    # --- v2.3.0 实测新增（column_formula / fit / 数据链路健壮性） ---
+    "formula_no_effect": (
+        True,
+        ["复核源列确有数据、目标列引用正确后重试",
+         "检查公式函数名：LabTalk 以 10 为底对数是 log() 而不是 log10()（log10 会静默无效）",
+         "引擎已自动做 range 变量绑定与函数名纠正，仍失败说明公式本身无法解析"],
+    ),
+    "no_data_to_fit": (
+        True,
+        ["用 origin_read_worksheet 查看拟合列：x/y 全空无法拟合",
+         "先写入或修复数据（origin_write_data / origin_import_file）再拟合"],
+    ),
+    "insufficient_data": (
+        True,
+        ["线性拟合至少需要 3 个有效点", "补足数据点或改用 origin_stats 做描述统计"],
+    ),
+    "column_empty": (
+        True,
+        ["目标列长度为 0：先写入数据或用 origin_column_formula 计算派生列"],
+    ),
+    "column_all_nan": (
+        True,
+        ["列有长度但全为空值：常见原因是上游 column_formula 未生效或源列含文本",
+         "用 origin_read_worksheet 复核上游数据，修复后重试"],
+    ),
+    # --- v2.3.0 项目保存策略（不自动写 .opju 的受控提示） ---
+    "manual_save_required": (
+        False,
+        ["请在 Origin 窗口按 Ctrl+S 手动保存当前项目",
+         "如需恢复脚本自动保存，取消环境变量 DSH_ORIGIN_NO_AUTO_SAVE 后重试"],
+    ),
 }
 
 VALID_CODES = frozenset(CODE_META)
+
+# ---------------------------------------------------------------------------
+# 错误码 -> 恢复动作映射表（#4）
+# ---------------------------------------------------------------------------
+# 每个错误码对应一段结构化恢复策略，fail() 会把精简版内嵌到失败返回里：
+#   policy     重试策略：
+#                fix_args_then_retry      修正参数/输入后重试
+#                retry_same_args          原样重试（瞬时故障，引擎已有自愈）
+#                restart_origin_then_retry 先清理 Origin 进程再重试
+#                replan_then_retry        数据/映射已变，重新生成计划后重试
+#                no_retry                 不要重试（需人工介入或改策略开关）
+#   diagnose   恢复前建议执行的诊断动作（工具调用或系统命令）
+RECOVERY_POLICY_FIX = "fix_args_then_retry"
+RECOVERY_POLICY_RETRY = "retry_same_args"
+RECOVERY_POLICY_RESTART = "restart_origin_then_retry"
+RECOVERY_POLICY_REPLAN = "replan_then_retry"
+RECOVERY_POLICY_NO = "no_retry"
+
+RECOVERY_MAP: Dict[str, Dict[str, Any]] = {
+    "connection_error": {
+        "policy": RECOVERY_POLICY_RESTART,
+        "diagnose": ["origin_diagnose",
+                     "taskkill /F /IM Origin64.exe 后等 2 秒再重连"
+                     "（或设置 DSH_ORIGIN_AUTOKILL=1 让引擎连接前自动清理）"],
+    },
+    "worksheet_not_found": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["origin_status", "origin_list_project"],
+    },
+    "graph_not_found": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["origin_list_graphs"],
+    },
+    "column_not_found": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["origin_read_worksheet"],
+    },
+    "invalid_request": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["origin_help"],
+    },
+    "empty_data": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["origin_write_data 或 origin_import_file"],
+    },
+    "no_such_column_ref": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["origin_read_worksheet"],
+    },
+    "unsupported_origin_feature": {
+        "policy": RECOVERY_POLICY_NO,
+        "diagnose": ["origin_status 查看 features 能力清单"],
+    },
+    "origin_operation_error": {
+        "policy": RECOVERY_POLICY_RESTART,
+        "diagnose": ["origin_status", "origin_diagnose"],
+    },
+    "export_error": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["origin_diagnose（含导出目录权限检查）",
+                     "查看返回里的 attempts 字段确认三级导出通道各自失败原因"],
+    },
+    "file_error": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["确认文件路径存在且未被锁定"],
+    },
+    "invalid_column_designation": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["origin_read_worksheet"],
+    },
+    "origin_busy_user_session": {
+        "policy": RECOVERY_POLICY_RESTART,
+        "diagnose": ["tasklist /FI \"IMAGENAME eq Origin64.exe\"",
+                     "taskkill /F /IM Origin64.exe 后等 2 秒再重连"
+                     "（或设置 DSH_ORIGIN_AUTOKILL=1 自动清理）"],
+    },
+    "file_unsupported_format": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["改用 CSV/TXT/XLSX"],
+    },
+    "file_read_error": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["确认文件未损坏/未被占用", "安装 openpyxl（XLSX 需要）"],
+    },
+    "plan_not_found": {
+        "policy": RECOVERY_POLICY_REPLAN,
+        "diagnose": ["origin_plot_plan 重新生成计划"],
+    },
+    "plan_stale": {
+        "policy": RECOVERY_POLICY_REPLAN,
+        "diagnose": ["数据或列映射已变化：重新 origin_plot_plan 并确认后 execute"],
+    },
+    "template_unavailable": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["origin_status 查看 features.templates"],
+    },
+    "delivery_error": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["确认交付目录可写（网盘同步目录可能锁文件）"],
+    },
+    "window_activation_failed": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["origin_list_pages", "origin_manage_pages(activate)"],
+    },
+    "layer_not_found": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["origin_inspect_graph"],
+    },
+    "formula_no_effect": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["origin_read_worksheet 复核源列/目标列",
+                     "检查函数名：LabTalk 底 10 对数是 log() 不是 log10()"],
+    },
+    "no_data_to_fit": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["origin_read_worksheet 查看 x/y 列数据"],
+    },
+    "insufficient_data": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["确认有效点数（线性拟合需 ≥3）"],
+    },
+    "column_empty": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["origin_read_worksheet 复核列长度"],
+    },
+    "column_all_nan": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["origin_read_worksheet 复核上游 column_formula / 数据写入"],
+    },
+    "manual_save_required": {
+        "policy": RECOVERY_POLICY_NO,
+        "diagnose": ["在 Origin 窗口按 Ctrl+S 手动保存",
+                     "或设置 DSH_ORIGIN_NO_AUTO_SAVE=0 恢复自动保存"],
+    },
+}
+
+_DEFAULT_RECOVERY = {
+    "policy": RECOVERY_POLICY_RESTART,
+    "diagnose": ["origin_status", "origin_diagnose"],
+}
+
+
+def recovery_info(code: str) -> Dict[str, Any]:
+    """返回错误码的恢复动作映射项；未知码退回通用恢复策略。"""
+    return RECOVERY_MAP.get(code, _DEFAULT_RECOVERY)
 
 
 def code_info(code: str) -> tuple:
@@ -145,7 +328,11 @@ def ok(**fields: Any) -> dict:
 def fail(code: str, error: Optional[str] = None, *,
          next_actions: Optional[Iterable[str]] = None,
          trace: Optional[str] = None, **extra: Any) -> dict:
-    """构造失败返回。error 缺省时给出该码的一段默认说明。"""
+    """构造失败返回。error 缺省时给出该码的一段默认说明。
+
+    自动内嵌该错误码的恢复动作（recovery.policy / recovery.diagnose），
+    调用方可用 **extra 里的同名键覆盖。
+    """
     recoverable, default_actions = code_info(code)
     payload = {
         "ok": False,
@@ -153,6 +340,7 @@ def fail(code: str, error: Optional[str] = None, *,
         "error": error or f"{code}",
         "recoverable": recoverable,
         "next_actions": list(next_actions) if next_actions is not None else list(default_actions),
+        "recovery": recovery_info(code),
     }
     if trace:
         payload["trace"] = trace

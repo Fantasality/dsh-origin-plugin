@@ -43,19 +43,27 @@ _EXTENDED = os.environ.get("ORIGIN_MCP_PROFILE", "full").lower() != "compact"
 
 mcp = MCPServer(
     name="origin",
-    version="2.2.2",
+    version="2.3.0",
     instructions=(
-        "Origin 科学绘图工具（连接本机 Origin 自动化服务器）。"
-        "画图/分析前先调用 origin_help 或 origin_catalog 获取速查（秒回）。"
+        "Origin 科学绘图工具（连接本机 Origin 自动化服务器，国内可用、DSH 生态、"
+        "MCP 桥接通用）。画图/分析前先调用 origin_help 或 origin_catalog 获取速查"
+        "（秒回），想不起调用链调 origin_cookbook（八场景速查+推荐默认参数）。"
+        "【默认规范】折线/散点默认 plot_type='line_symbol'；未指定导出参数时 "
+        "fmt='png'、width=1200；投稿/发表图默认 style_mode='journal'（单栏 89mm/"
+        "双栏 183mm）且导出 width>=1800；轴标题必须语义化（物理量+单位，如 "
+        "'Time (s)'），拒绝 A/B/C 占位名。"
         "推荐一键 origin_plot_file；数据在本地文件时先 origin_load_file 导入；"
-        "数据含义不确定时先 origin_plot_plan 生成计划并向用户确认再执行。"
-        "出图后用 origin_view_graph（模型看图）自查，关键交付再用 "
-        "origin_verify_graph 程序反读核验；正式交付用 origin_export_delivery "
-        "（图片+可编辑 OPJU 集中到源文件同级目录）。"
+        "列语义不明/发表级图/多组对比时必须先 origin_plot_plan 生成计划并向用户"
+        "确认（plan_hash 防陈旧），再 origin_execute_plan。"
+        "出图后用 origin_view_graph（模型看图，也可把图带给用户）自查，关键交付"
+        "再用 origin_verify_graph 程序反读核验；正式交付用 origin_export_delivery"
+        "（图片+数据csv+可编辑 OPJU 集中到源文件同级目录）。"
         "科学边界：不虚构/不补数据；不确定列先问；派生列标注 derived；"
-        "不静默拟合/平滑/归一化。"
-        "所有工具返回 JSON：ok 字段表示成败，失败时读 error_code / "
-        "recoverable / next_actions 安全分支重试。"
+        "不静默拟合/平滑/归一化；自研统计结果仅供探索（confidence_note），"
+        "正式发表用 SPSS/R/Origin 复核。"
+        "所有工具返回 JSON：ok 字段表示成败，失败时读 error_code / recoverable /"
+        " next_actions / recovery 安全分支重试；每次调用带 trace_id + duration_ms。"
+        "连接/导出失败先 origin_diagnose 定位（不连 Origin 的系统自检）。"
     ),
 )
 
@@ -69,6 +77,8 @@ TOOL_CATALOG = [
     {"name": "origin_help", "group": "连接与诊断", "desc": "快速使用速查（不连 Origin，秒回）"},
     {"name": "origin_catalog", "group": "连接与诊断", "desc": "动态工具目录（按分类列出全部工具）"},
     {"name": "origin_error_codes", "group": "连接与诊断", "desc": "列出全部稳定错误码与恢复建议"},
+    {"name": "origin_diagnose", "group": "连接与诊断", "desc": "系统级自检：Origin 安装/COM 注册/残留进程/导出目录权限（连接失败先调它）"},
+    {"name": "origin_cookbook", "group": "连接与诊断", "desc": "场景→工具组合速查：常见调用链 + 推荐默认参数（离线秒回）"},
     {"name": "origin_list_graphs", "group": "连接与诊断", "desc": "列出当前项目的图页短名"},
     {"name": "origin_list_sheets", "group": "连接与诊断", "desc": "列出当前项目的工作簿/工作表页"},
     # data
@@ -101,6 +111,12 @@ TOOL_CATALOG = [
     {"name": "origin_edit_page", "group": "细粒度编辑", "desc": "微调页面与图层几何：纸张 cm 尺寸/背景/图层位置"},
     {"name": "origin_manage_pages", "group": "细粒度编辑", "desc": "窗口管理：关闭/激活/重命名/隐藏/复制页面"},
     {"name": "origin_add_text", "group": "细粒度编辑", "desc": "添加文本标注（峰位/条件说明）"},
+
+    {"name": "origin_column_formula", "group": "数据编辑", "desc": "Origin 原生列公式（ln/col 运算走 Origin 引擎，数据准确化）"},
+    {"name": "origin_peak_fit", "group": "拟合与统计", "desc": "多峰拟合（Gauss/Lorentz 分峰，核磁/XPS/拉曼/红外）"},
+    {"name": "origin_mask_points", "group": "数据编辑", "desc": "屏蔽指定数据点（NaN 化隐藏错误点，可逆）"},
+    {"name": "origin_add_line", "group": "细粒度编辑", "desc": "画辅助线（vertical/horizontal/slope，Tafel 外推/阈值线）"},
+    {"name": "origin_labtalk", "group": "连接与诊断", "desc": "任意 LabTalk 执行（逃生舱；带激活+读回+NaN 防护）"},
     # edit
     {"name": "origin_filter_data", "group": "数据编辑", "desc": "删除/裁剪数据点（写回原工作表）"},
     # fit / analysis
@@ -181,6 +197,27 @@ def origin_error_codes() -> dict:
 
 
 @mcp.tool()
+def origin_diagnose(connect_probe: bool = False) -> dict:
+    """系统级自检：Origin 安装路径/COM 注册/残留进程/导出目录权限/环境策略。
+
+    连接失败或导出失败时先调用本工具定位问题（不启动 Origin，无副作用）。
+    connect_probe=True 时额外尝试真实连接 Origin（可能启动 Origin，约 5~45 秒）。
+    """
+    return engine.diagnose(connect_probe=connect_probe)
+
+
+@mcp.tool()
+def origin_cookbook(scenario: str = "") -> dict:
+    """场景→工具组合速查（离线秒回，不连 Origin）。
+
+    返回常见调用链与推荐默认参数。scenario 可选：
+    quick_plot/from_file/journal/multi_compare/edit/fit/recover/deliver；
+    留空返回全部场景 + 高频工具默认参数 + 快速/正式路径说明。
+    """
+    return engine.cookbook(scenario=scenario)
+
+
+@mcp.tool()
 def origin_list_graphs() -> dict:
     """列出当前 Origin 项目里的图页短名（供 export/view/apply_style 引用）。"""
     return engine.list_graphs()
@@ -221,6 +258,87 @@ def origin_read_worksheet(worksheet: str, columns: list = None, max_rows: int = 
         {"ok": true, "columns": {列名: [数值...]}, "column_meta": [...], "n_rows": N}
     """
     return engine.read_worksheet(worksheet, columns=columns, max_rows=max_rows)
+
+
+@mcp.tool()
+def origin_column_formula(worksheet: str, target, formula: str,
+                          lname: str = "") -> dict:
+    """Origin 原生列公式（数据准确化：ln 等计算走 Origin 表格引擎而非 numpy）。
+
+    Args:
+        worksheet: 工作表引用（write_data/load_file 返回值）。
+        target: 目标列（0 起索引，超出自动 AddCol；或新列名）。
+        formula: 用 col(N)（1 起）引用本表列的 LabTalk 表达式，
+            如 "ln(col(2))"、"1/col(1)"、"col(2)/col(3)*100"。
+        lname: 目标列 long name。
+    返回含 first_values 与 sample_check（numpy 抽样复核 Origin 计算结果）。
+    """
+    return engine.column_formula(worksheet, target, formula, lname=lname or None)
+
+
+@mcp.tool()
+def origin_peak_fit(worksheet: str, x_column: str = "", y_column: str = "",
+                    n_peaks: int = 1, kind: str = "gauss",
+                    centers_hint: list = None, plot_curve: bool = True,
+                    graph: str = "", title: str = "",
+                    show_components: bool = True) -> dict:
+    """多峰拟合（核磁/XPS/拉曼/红外分峰解析，numpy LM 自包含实现）。
+
+    每峰返回 center/height/fwhm/area + 总 R²；centers_hint 可给峰位初值
+    （缺省用 peak_find 自动探测）；plot_curve=True 时原始散点+总拟合线+
+    各分峰一并上图。kind: gauss | lorentz。
+    """
+    return engine.peak_fit(worksheet, x_column or 0, y_column or 1,
+                           n_peaks=n_peaks, kind=kind,
+                           centers_hint=centers_hint, plot_curve=plot_curve,
+                           graph=graph or None, title=title or None,
+                           show_components=show_components)
+
+
+@mcp.tool()
+def origin_mask_points(worksheet: str, y_column: str = "", rows: list = None,
+                       x_min: float = None, x_max: float = None,
+                       x_column: str = "", backup: bool = True) -> dict:
+    """屏蔽指定数据点（置 NaN，图上自动隐藏；backup=True 先备份原列，可逆）。
+
+    rows 为行号列表（0 起），或用 x_min/x_max + x_column 按区间屏蔽。
+    典型："这几个明显是错误点，帮我隐藏" / "把 x<0 的预热段隐藏"。
+    """
+    return engine.mask_points(worksheet, y_column or 1, rows=rows,
+                              x_min=x_min, x_max=x_max,
+                              x_column=x_column or None, backup=backup)
+
+
+@mcp.tool()
+def origin_add_line(graph: str, orientation: str = "vertical",
+                    at: float = None, slope: float = None,
+                    intercept: float = None, color: str = "#D55E00",
+                    line_style: int = 1, label: str = "",
+                    layer: int = 0) -> dict:
+    """画辅助线：vertical/horizontal（给 at）或 slope（给 slope+intercept）。
+
+    Tafel 外推线、零参考线、阈值线、半圆直径辅助线等场景。
+    line_style: 0 实线 1 虚线 2 点线。label 可选（同时写为列名与标注）。
+    """
+    return engine.add_line(graph, orientation=orientation, at=at, slope=slope,
+                           intercept=intercept, color=color,
+                           line_style=line_style, label=label or None,
+                           layer=layer)
+
+
+@mcp.tool()
+def origin_labtalk(script: str, read_expr: str = "", graph: str = "",
+                   read_kind: str = "auto") -> dict:
+    """执行任意 LabTalk 并可选读回（逃生舱：SKILL 未覆盖的功能由此直达）。
+
+    graph 非空时先激活该图页（否则裸表达式可能静默落到错误窗口）。
+    read_expr 如 "layer.x.from"、"page.nlayers"、"layer.y.title$"，
+    读回为 NaN 时明确标注 unreliable（不会假成功）。
+    优先用专用工具（origin_edit_* 等已内置激活+读回），仅当专用工具
+    覆盖不到时才用本工具。
+    """
+    return engine.labtalk(script, read_expr=read_expr or None,
+                          graph=graph or None, read_kind=read_kind)
 
 
 @mcp.tool()
@@ -274,19 +392,24 @@ def origin_plot_plan(columns: dict, plot_type: str = "line",
 
 @mcp.tool()
 def origin_execute_plan(plan_id: str, fmt: str = "", file_path: str = "",
-                        graph_name: str = "", width: int = 1200) -> dict:
+                        graph_name: str = "", width: int = 1200,
+                        expect_hash: str = "", force: bool = False) -> dict:
     """按 plan_id 执行绘图计划：写数 -> 画图 -> 导出。
 
     Args:
         plan_id: origin_plot_plan 返回的计划 ID（服务端缓存，重启失效）。
         fmt / file_path / graph_name / width: 可选，覆盖计划中的对应参数。
+        expect_hash: 可选，传入 origin_plot_plan 返回的 plan_hash 做陈旧校验；
+            数据/映射变化后不匹配会返回 plan_stale。
+        force: 数据/映射变更检测到更新的同签名计划时，force=true 可强制执行旧计划。
     Returns:
         {"ok": true, "file": ..., "graph": ..., "worksheet": ..., "plan_id": ...}
         计划含未确认 questions 时附带 confirmation_reminder 提醒。
     """
     return engine.execute_plan(plan_id, fmt=fmt or None,
                                file_path=file_path or None,
-                               graph_name=graph_name or None, width=width)
+                               graph_name=graph_name or None, width=width,
+                               expect_hash=expect_hash or None, force=force)
 
 
 # ---------------------------------------------------------------------------
@@ -549,7 +672,9 @@ def origin_save_project(path: str) -> dict:
 @mcp.tool()
 def origin_export_delivery(graph: str, source_path: str = "",
                            output_dir: str = "", fmts: str = "png,pdf",
-                           width: int = 1200, save_opju: bool = True) -> dict:
+                           width: int = 1200, save_opju: bool = True,
+                           report_text: str = "",
+                           export_data_csv: bool = True) -> dict:
     """一键交付：建规整目录收纳图片 + 可编辑 OPJU 并逐文件核验。
 
     传 source_path 时在源数据文件同级新建 <数据名>_Origin_<时间戳>/ 目录
@@ -567,7 +692,9 @@ def origin_export_delivery(graph: str, source_path: str = "",
     """
     return engine.export_delivery(graph, source_path=source_path or None,
                                   output_dir=output_dir or None, fmts=fmts,
-                                  width=width, save_opju=save_opju)
+                                  width=width, save_opju=save_opju,
+                                  report_text=report_text or None,
+                                  export_data_csv=export_data_csv)
 
 
 # ---------------------------------------------------------------------------
@@ -1242,7 +1369,8 @@ def _offline_test():
     risks = engine.CAPABILITY_KNOWN_RISKS
     assert risks and all("code" in r and "workaround" in r for r in risks)
     assert set(engine.PLOT_TEMPLATES) == {"stacked_spectra", "xrd_pattern",
-                                          "dual_y", "forest", "multi_panel"}
+                                          "dual_y", "forest", "multi_panel",
+                                          "cycle_overlay", "eis_nyquist"}
     print("capabilities OK:", len(risks), "known risks,",
           len(engine.PLOT_TEMPLATES), "templates")
 

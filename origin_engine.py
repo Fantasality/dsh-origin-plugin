@@ -110,6 +110,17 @@ PLOT_TEMPLATES = {
         "data": "{'x': [..] 可选（缺省用行号）, 'panels': {'面板名': [..], ...}}",
         "options": "无",
     },
+    "cycle_overlay": {
+        "desc": "多曲线同图叠放 + 渐变色（CV 多圈 / 充放电多循环 / 多轮次对比）",
+        "data": "{'x': [..], 'series': {'曲线名': [..], ...}（≥2 条）,"
+                "'legend_mode': 'all'|'first_last'|'none' 可选}",
+        "options": "x_title/y_title 覆盖轴标题",
+    },
+    "eis_nyquist": {
+        "desc": "电化学阻抗谱 Nyquist 图（-Z'' vs Z'，等轴比 + 近正方形图层）",
+        "data": "{'z_real': [..], 'z_imag': [..]}",
+        "options": "x_title/y_title 覆盖轴标题",
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -232,12 +243,25 @@ def _synchronized(fn):
 
     边界兜底：若 impl 返回旧式 {"ok": false, ...}，升级为统一错误码结构
     （error_code / recoverable / next_actions），保证 MCP 面格式始终一致。
+    每次调用自动附加 trace_id 与 duration_ms（#6），便于定位失败阶段。
     """
     def wrapper(*args, **kwargs):
         _configure_ipc_lock_if_requested()
+        t0 = time.time()
         result = _run_on_com_thread(fn, *args, **kwargs)
-        if isinstance(result, dict) and not result.get("ok") and "error_code" not in result:
-            return oerr.upgrade_legacy_failure(result)
+        elapsed_ms = int((time.time() - t0) * 1000)
+        trace_id = f"t{uuid.uuid4().hex[:12]}"
+        # 常规 dict 返回直接附加；connect() 的 (bool, dict) 元组附加到第二元素
+        if isinstance(result, dict):
+            result["trace_id"] = trace_id
+            result["duration_ms"] = elapsed_ms
+            if not result.get("ok") and "error_code" not in result:
+                return oerr.upgrade_legacy_failure(result)
+            return result
+        if (isinstance(result, tuple) and len(result) == 2
+                and isinstance(result[1], dict)):
+            result[1]["trace_id"] = trace_id
+            result[1]["duration_ms"] = elapsed_ms
         return result
     return wrapper
 
@@ -390,13 +414,64 @@ def _origin_proc_count():
         return None
 
 
+def _autokill_enabled():
+    """连接前自动清理残留 Origin 进程的开关（DSH_ORIGIN_AUTOKILL）。
+
+    - 显式 "1"/"true"/"on"/"yes"：强制开启；"0"/"false"/"off"/"no"：强制关闭；
+    - 未设置时：仅 ORIGIN_SESSION=isolated 默认开启（隔离会话里正在运行的
+      Origin 视为上一轮自动化残留，可安全清理重建）；
+    - attach 模式（默认）不开：用户手动打开的 Origin 可能有未保存工作，
+      只在连接失败时通过 recovery.diagnose 建议手动 taskkill。
+    """
+    raw = os.environ.get("DSH_ORIGIN_AUTOKILL")
+    if raw is not None and raw.strip():
+        return raw.strip().lower() in ("1", "true", "on", "yes")
+    return os.environ.get("ORIGIN_SESSION", "attach").lower() == "isolated"
+
+
+def _kill_residual_origin(wait_seconds=2.0):
+    """taskkill 清理全部 Origin64 进程并等待其完全退出（连接前自愈，#1）。
+
+    约束：只应在 _autokill_enabled() 为真时调用（见该函数的策略说明）。
+    返回诊断 dict；after>0 表示 taskkill 未能清干净（权限/守门进程）。
+    """
+    before = _origin_proc_count()
+    info = {"enabled": True, "before": before, "killed": False, "after": None,
+            "wait_ms": 0}
+    if not before:
+        info["after"] = before
+        return info
+    try:
+        os.popen('taskkill /F /IM Origin64.exe /T >nul 2>&1').read()
+        info["killed"] = True
+    except Exception:
+        pass
+    t0 = time.time()
+    time.sleep(max(0.0, float(wait_seconds)))   # 要求：等 2 秒再让 COM 重启它
+    deadline = time.time() + 8.0                # 进程退出最多再等 8 秒
+    while time.time() < deadline:
+        if not _origin_proc_count():
+            break
+        time.sleep(0.5)
+    info["wait_ms"] = int((time.time() - t0) * 1000)
+    info["after"] = _origin_proc_count()
+    return info
+
+
 def _connect_impl():
     global _connected, _origin_app
-    blocked = _isolated_session_blocked()
-    if blocked is not None:
-        return False, blocked
     if _connected and _origin_app is not None:
         return True, _describe_impl()
+    # 连接前自愈（#1）：清理残留 Origin64 进程 -> 等 2 秒 -> 再让 COM 启动/复用
+    autokill = _kill_residual_origin() if _autokill_enabled() else None
+    blocked = _isolated_session_blocked()
+    if blocked is not None:
+        if autokill and autokill.get("after"):
+            blocked["autokill"] = autokill
+            blocked.setdefault("next_actions", []).append(
+                "已尝试自动 taskkill 但仍有 Origin64 进程存活（权限不足），"
+                "请手动关闭或用管理员权限重试")
+        return False, blocked
     try:
         import originpro as op
         # 单实例语义加固：originpro 首次访问默认走 Origin.Application（可能启动
@@ -421,6 +496,8 @@ def _connect_impl():
             "origin_running_before": _origin_running(),
             "detail": "已连接 Origin COM 自动化服务器",
         }
+        if autokill is not None:
+            info["autokill"] = autokill
         if nproc and nproc > 1:
             info["warning"] = (
                 f"检测到 {nproc} 个 Origin64 进程（正常应为 1）。多实例会导致 COM "
@@ -433,19 +510,21 @@ def _connect_impl():
         if nproc and nproc > 1:
             extra = (f" 当前有 {nproc} 个 Origin64 进程（多实例冲突常见原因），"
                      "请关闭多余的 Origin 窗口只保留一个主实例后重试。")
-        return False, {
-            "ok": False,
-            "connected": False,
-            "error": str(e) + extra,
-            "origin_running": _origin_running(),
-            "hint": (
-                "无法连接 Origin。请检查："
-                "1) 是否已安装 Origin（C:\\Program Files\\OriginLab\\Origin2026b\\Origin64.exe）；"
-                "2) 是否已打开 Origin（或允许脚本自动启动它）；"
-                "3) Origin 是否以管理员权限运行而脚本不是（COM 权限不匹配）；"
-                "4) 首次使用需等待 Origin 完成启动（最多约45秒）。"
-            ),
-        }
+        result = oerr.fail(
+            "connection_error",
+            str(e) + extra,
+            origin_running=_origin_running(),
+            next_actions=[
+                "确认已安装 Origin（C:\\Program Files\\OriginLab\\Origin2026b\\Origin64.exe）",
+                "确认 Origin 可被脚本启动（首次启动约 5~45 秒）",
+                "Origin 与脚本的运行权限需一致（管理员/普通）",
+                "taskkill /F /IM Origin64.exe 清理残留进程，等 2 秒后重试"
+                "（或设置 DSH_ORIGIN_AUTOKILL=1 自动清理）",
+                "调 origin_diagnose 定位安装/COM 注册/目录权限问题",
+            ])
+        if autokill is not None:
+            result["autokill"] = autokill
+        return False, result
 
 
 def _describe_impl():
@@ -788,6 +867,56 @@ def _y_columns_impl(wks, x_column):
 # ---------------------------------------------------------------------------
 # 导出
 # ---------------------------------------------------------------------------
+def _file_valid_for(path, fmt):
+    """导出产物有效性：存在、非空；png/pdf 再校验文件头（防假成功）。"""
+    try:
+        if not path or not os.path.exists(path):
+            return False
+        if os.path.getsize(path) <= 0:
+            return False
+        with open(path, "rb") as fh:
+            head = fh.read(8)
+        if fmt == "png" and not head.startswith(b"\x89PNG"):
+            return False
+        if fmt == "pdf" and not head.startswith(b"%PDF"):
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _com_image_export(op, file_path, fmt):
+    """COM 通道 2：Origin 自动化服务器的 ImageExport 对象（page 级导出）。
+
+    属性名在不同 Origin 版本间可能有差异，任何异常都交给上层回退链处理；
+    成功与否最终以 _file_valid_for 的文件头校验为准。
+    """
+    po = getattr(op, "po", None)
+    ie = getattr(po, "ImageExport", None) if po is not None else None
+    if ie is None:
+        raise AttributeError("ImageExport 对象不可用")
+    ie.FileName = file_path
+    ie.Export()
+    return file_path
+
+
+def _lt_exp_graph(op, graph, file_path, fmt, width):
+    """LabTalk 通道 3：显式 expGraph 命令导出（最后回退）。
+
+    注意 LabTalk 静默失败特性：命令不抛异常不代表成功，
+    上层必须用文件存在性/文件头校验裁决。
+    """
+    folder, name = os.path.split(str(file_path).replace("\\", "/"))
+    stem = os.path.splitext(name)[0]
+    tr = ""
+    if fmt == "png" and width and width > 0:
+        tr = " tr1.Unit:=2 tr1.Width:=%d" % int(width)
+    cmd = ('expGraph igp:=%s type:=%s path:="%s" filename:="%s" '
+           'overwrite:=replace%s;' % (graph, fmt, folder, stem, tr))
+    op.po.LT_execute(cmd)
+    return file_path
+
+
 def _export_impl(graph, file_path=None, fmt="png", width=1200, output_dir=None):
     try:
         ok, conn = _connect_impl()
@@ -799,12 +928,12 @@ def _export_impl(graph, file_path=None, fmt="png", width=1200, output_dir=None):
         if fmt == "tiff":
             fmt = "tif"
         if fmt not in ("png", "svg", "pdf", "tif", "emf"):
-            return {"ok": False,
-                    "error": f"fmt 只支持 png/svg/pdf/tif/emf，收到 {fmt!r}"}
+            return oerr.fail("invalid_request",
+                             f"fmt 只支持 png/svg/pdf/tif/emf，收到 {fmt!r}")
 
         gp = op.find_graph(graph)
         if not gp:
-            return {"ok": False, "error": f"图不存在: {graph}"}
+            return oerr.fail("graph_not_found", f"图不存在: {graph}")
 
         if file_path:
             file_path = os.path.abspath(file_path)
@@ -820,18 +949,54 @@ def _export_impl(graph, file_path=None, fmt="png", width=1200, output_dir=None):
         kwargs = {"replace": True}
         if fmt == "png" and width and width > 0:
             kwargs["width"] = int(width)
-        result = gp.save_fig(file_path, **kwargs)
-        if not result or not os.path.exists(result):
-            return {"ok": False, "error": f"导出失败，save_fig 返回 {result!r}"}
+
+        # 三级导出回退链（#2）：save_fig(expGraph 封装) -> COM ImageExport
+        # -> LabTalk expGraph；每级都做文件存在性 + 文件头校验（防 LabTalk
+        # 静默失败 / 0 字节 / 错误格式文件冒充成功）。
+        attempts = []
+        final = None
+
+        res1, err1 = safe_call(gp.save_fig, file_path, **kwargs)
+        attempts.append({"channel": "save_fig(expGraph)", "ok": _file_valid_for(res1, fmt),
+                         "returned": str(res1) if res1 else None, "error": err1})
+        if _file_valid_for(res1, fmt):
+            final = res1
+
+        if final is None:
+            res2, err2 = safe_call(_com_image_export, op, file_path, fmt)
+            attempts.append({"channel": "com_image_export", "ok": _file_valid_for(file_path, fmt),
+                             "returned": str(res2) if res2 else None, "error": err2})
+            if _file_valid_for(file_path, fmt):
+                final = file_path
+
+        if final is None:
+            res3, err3 = safe_call(_lt_exp_graph, op, graph, file_path, fmt, width)
+            attempts.append({"channel": "labtalk_expGraph", "ok": _file_valid_for(file_path, fmt),
+                             "returned": str(res3) if res3 else None, "error": err3})
+            if _file_valid_for(file_path, fmt):
+                final = file_path
+
+        if not _file_valid_for(final, fmt):
+            return oerr.fail(
+                "export_error",
+                f"导出失败：三级通道（save_fig -> COM ImageExport -> LabTalk expGraph）"
+                f"均未生成有效文件，目标 {file_path}",
+                attempts=attempts, file_path=file_path, format=fmt,
+                next_actions=["查看 attempts 字段确认各通道失败原因",
+                              "确认输出目录存在且有写权限",
+                              "调 origin_diagnose 检查导出目录权限后重试"])
+        channel = next((a["channel"] for a in attempts if a["ok"]),
+                       "save_fig(expGraph)")
         return {
             "ok": True,
-            "file": result,
-            "size": os.path.getsize(result),
+            "file": final,
+            "size": os.path.getsize(final),
             "format": fmt,
-            "detail": f"已导出 {fmt.upper()} -> {result} ({os.path.getsize(result)} bytes)",
+            "channel": channel,
+            "detail": f"已导出 {fmt.upper()} -> {final} ({os.path.getsize(final)} bytes, 通道 {channel})",
         }
     except Exception as e:
-        return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
 
 
 # ---------------------------------------------------------------------------
@@ -947,6 +1112,53 @@ def _fit_impl(worksheet, x_column, y_column, kind="linear", plot_curve=True,
             return {"ok": False, "error": f"工作表不存在: {worksheet}"}
 
         kind = (kind or "linear").strip()
+        # 空列 / 有效点过少防护（2026-09-16 d05 实测：column_formula 静默未赋值后
+        # 目标列全 missing，拟合器返回 Origin missing 值 -1.23456789e-300 当 slope，
+        # 是"假成功"。这里在读数据阶段就拦截。）
+        try:
+            _xi1 = _col_index_impl(wks, x_column)
+            _yi1 = _col_index_impl(wks, y_column)
+            if _xi1 is not None and _yi1 is not None:
+                _nx = sum(1 for v in wks.to_list(_xi1)
+                          if isinstance(v, (int, float)) and v == v)
+                _ny = sum(1 for v in wks.to_list(_yi1)
+                          if isinstance(v, (int, float)) and v == v)
+                if _ny == 0 or _nx == 0:
+                    return oerr.fail(
+                        "no_data_to_fit",
+                        f"拟合列为空（x 有效点 {_nx}，y 有效点 {_ny}）；"
+                        "请先确认数据列已写入（例如 column_formula 是否真正生效）",
+                        worksheet=str(wks), x_column=str(x_column),
+                        y_column=str(y_column))
+                if min(_nx, _ny) < 3:
+                    return oerr.fail(
+                        "insufficient_data",
+                        f"有效数据点过少（x {_nx}，y {_ny}），至少需要 3 点才能拟合",
+                        worksheet=str(wks), valid_points=min(_nx, _ny))
+        except Exception:
+            pass
+        # NaN 行过滤（2026-09-16 d05 实测：mask_points 屏蔽后的列含 NaN，
+        # Origin 拟合器对 NaN 行会产生数值爆炸 slope≈-8e53）。
+        # 有 NaN 时把有效行写临时表再拟合。
+        nan_dropped = 0
+        try:
+            import numpy as _npf
+            _xi0 = _col_index_impl(wks, x_column)
+            _yi0 = _col_index_impl(wks, y_column)
+            if _xi0 is not None and _yi0 is not None:
+                _xv0 = _npf.asarray(wks.to_list(_xi0), dtype=float)
+                _yv0 = _npf.asarray(wks.to_list(_yi0), dtype=float)
+                _m = _npf.isfinite(_xv0) & _npf.isfinite(_yv0)
+                if not _m.all():
+                    _tmp = op.new_sheet("w", _new_unique_name("FitClean"))
+                    _tmp.from_list(0, [round(float(v), 10)
+                                       for v in _xv0[_m]], lname="x")
+                    _tmp.from_list(1, [round(float(v), 10)
+                                       for v in _yv0[_m]], lname="y")
+                    nan_dropped = int((~_m).sum())
+                    wks, x_column, y_column = _tmp, 0, 1
+        except Exception:
+            nan_dropped = 0
         if kind == "linear":
             lr = op.LinearFit()
             lr.set_data(wks, x_column, y_column)
@@ -957,7 +1169,12 @@ def _fit_impl(worksheet, x_column, y_column, kind="linear", plot_curve=True,
                     "slope_error": res["Parameters"]["Slope"].get("Error"),
                     "intercept": res["Parameters"]["Intercept"]["Value"],
                     "intercept_error": res["Parameters"]["Intercept"].get("Error"),
-                    "note": "R² 等统计量见报告表（report 字段）",
+                    "x_intercept": (-res["Parameters"]["Intercept"]["Value"]
+                                    / res["Parameters"]["Slope"]["Value"]
+                                    if res["Parameters"]["Slope"]["Value"]
+                                    else None),
+                    "note": "R² 等统计量见报告表（report 字段）；x_intercept 为拟合线"
+                            "与 x 轴交点（y=0 处），拟合线交 y 轴即 intercept",
                 }
             except Exception:
                 parameters = {"raw": res}
@@ -985,9 +1202,24 @@ def _fit_impl(worksheet, x_column, y_column, kind="linear", plot_curve=True,
             "report": rep,
             "fit_curves": curves,
             "worksheet": str(wks),
+            "nan_dropped": nan_dropped,
             "supported_kinds": FIT_SUPPORTED_KINDS,
-            "detail": f"{fit_kind} 拟合完成，参数见 parameters",
+            "detail": (f"{fit_kind} 拟合完成，参数见 parameters"
+                       + (f"（已滤除 {nan_dropped} 个 NaN 行）"
+                          if nan_dropped else "")),
         }
+        # Origin missing 值消毒：Origin 内部缺测用 -1.23456789e-300 表示（非 NaN），
+        # 上一版会让它冒充 slope 返回。这里统一替换为 None 并加 warning。
+        _MISSING_VAL = -1.23456789e-300
+        _miss_keys = []
+        for _k, _v in list(parameters.items()):
+            if isinstance(_v, (int, float)) and abs(_v - _MISSING_VAL) < 1e-310:
+                parameters[_k] = None
+                _miss_keys.append(_k)
+        if _miss_keys:
+            result["warning"] = (f"以下参数为 Origin 缺测值（已置 None）："
+                                 f"{', '.join(_miss_keys)}；通常意味着拟合未真正收敛，"
+                                 "请检查数据范围或换 kind")
 
         # NLFit 报告副产品页面清理（FitLine*/Residual*：参数已在返回值里，
         # 页面留着会爆窗口 —— 2026-09-16 实测 7 次 fit 多开 14 页）
@@ -1021,6 +1253,619 @@ def _fit_impl(worksheet, x_column, y_column, kind="linear", plot_curve=True,
             result["graph"] = gname
             result["detail"] += f"，拟合曲线已上图（{gname}）"
         return result
+    except Exception as e:
+        return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
+
+
+# ---------------------------------------------------------------------------
+# Origin 原生列公式（数据准确化：ln 等计算走 Origin 表格引擎而非 numpy，
+# AI 只负责识图/给原始 csv —— 2026-09-16 v2.3.0）
+# ---------------------------------------------------------------------------
+# LabTalk 支持的数学函数（probe 实证）：ln=自然对数、log=以 10 为底对数（不是 log10!）、
+# exp/sqrt/abs。Origin 的 LabTalk **没有 log10() 函数**，写 log10(x) 不报错但静默不赋值。
+_LT_FUNC_ALIASES = {"log10": "log", "log2": "log", "loge": "ln"}
+
+# numpy 复核用的同名映射（LabTalk 函数名 -> numpy 函数）
+_NP_FUNC_MAP = {
+    "ln": "log", "log": "log10", "exp": "exp", "sqrt": "sqrt",
+    "abs": "abs", "sin": "sin", "cos": "cos", "tan": "tan",
+    "atan": "arctan", "asin": "arcsin", "acos": "arccos",
+    "sinh": "sinh", "cosh": "cosh", "tanh": "tanh", "floor": "floor",
+    "ceil": "ceil", "int": "trunc", "sign": "sign",
+}
+
+
+def _column_formula_impl(worksheet, target, formula, lname=None):
+    """对目标列写入 LabTalk 公式并立即求值（range 作用域，无需激活任何窗口）。
+
+    Args:
+        worksheet: 工作表引用（[BookN]Sheet1）。
+        target: 目标列（数字索引 0 起，超出则自动 AddCol；或新列名）。
+        formula: LabTalk 表达式，用 col(N)（1 起）引用本表列，如
+            "ln(col(2))"、"log(col(2))"（以 10 为底）、"1/col(1)"、
+            "col(2)/col(3)*100"、"exp(col(2))"。
+            注意：LabTalk 的以 10 为底对数是 log()，**不是 log10()**；
+            传 log10() 会被自动纠正为 log()。
+        lname: 目标列 long name（可选，默认沿用 formula 提示）。
+    返回: {"ok", "worksheet", "column", "points", "first_values", "sample_check"}
+        sample_check 用 numpy 对首个有限值复核（数据准确化内置验证）。
+        写入后**必须**读回；目标列全空 = 失败（Origin 的 LT_execute 对
+        log10() 这类无效函数不报错但静默不写，是典型假成功来源）。
+    """
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        wks = op.find_sheet("w", worksheet)
+        if not wks:
+            return oerr.fail("worksheet_not_found", f"工作表不存在: {worksheet}",
+                             worksheet=worksheet)
+        import re as _re
+        if not isinstance(formula, str) or "col(" not in formula:
+            return oerr.fail("invalid_request",
+                             "formula 必须是含 col(N) 的 LabTalk 表达式，"
+                             "如 'ln(col(2))'（N 为 1 起始列号）",
+                             formula=str(formula)[:120])
+        sheet_ref = str(wks)                       # [BookN]Sheet1
+        ncol = int(wks.obj.Cols)
+
+        # ---- 公式规范化：纠正 LabTalk 无效函数名（probe 实证 log10 不存在）----
+        norm_formula = formula
+        fixed_funcs = []
+        for bad, good in _LT_FUNC_ALIASES.items():
+            if _re.search(rf"\b{_re.escape(bad)}\s*\(", norm_formula):
+                norm_formula = _re.sub(rf"\b{_re.escape(bad)}\s*\(",
+                                       f"{good}(", norm_formula)
+                fixed_funcs.append(f"{bad}() -> {good}()")
+        if "log(" in norm_formula and "log10(" not in norm_formula \
+                and "log10()" not in fixed_funcs:
+            pass  # log() 已被 Origin 原生支持，无需改写
+
+        # 目标列定位/创建（originpro 无 AddCol()，用 Cols 属性写——probe 实证）
+        if isinstance(target, int) or (isinstance(target, str) and target.isdigit()):
+            ti = int(target)
+            while ti >= int(wks.obj.Cols):
+                wks.obj.Cols = int(wks.obj.Cols) + 1
+            ci = ti
+        else:
+            ci = None
+            for j in range(int(wks.obj.Cols)):
+                try:
+                    if (wks.obj[j].GetLongName() or "") == str(target):
+                        ci = j
+                        break
+                except Exception:
+                    pass
+            if ci is None:
+                wks.obj.Cols = int(wks.obj.Cols) + 1
+                ci = int(wks.obj.Cols) - 1
+                try:
+                    wks.obj[ci].SetLongName(str(target))
+                except Exception:
+                    pass
+        if lname:
+            try:
+                wks.obj[ci].SetLongName(str(lname))
+            except Exception:
+                pass
+
+        # 目标列清空（避免旧残值被误读为"本次写成功"）
+        target_ref = f"{sheet_ref}!col({ci + 1})"
+        safe_call(op.po.LT_execute, f"range __clr = {target_ref}; __clr = 0/0;")
+
+        # col(N) → **先绑定为 range 变量**，再把公式里的 col(N) 换成该变量名。
+        # probe 实证（V1~V4）：LabTalk 不允许把 `[Book]Sheet!col(N)` 以内联形式
+        # 当右值操作数 —— `range __t=[B]S!col(2); __t=ln([B]S!col(1));` 静默不赋值；
+        # 必须先 `range __s=[B]S!col(1);` 再 `__t=ln(__s);` 才生效。
+        src_cols = sorted({int(m.group(1))
+                           for m in _re.finditer(r"col\((\d+)\)", norm_formula)})
+        binds = []
+        var_of = {}
+        for n in src_cols:
+            if n == ci + 1:
+                var = "__rc"            # 目标列即自身（自引用公式）
+            else:
+                var = f"__c{n}"
+            var_of[n] = var
+            binds.append(f"range {var} = {sheet_ref}!col({n});")
+        lt_formula = _re.sub(r"col\((\d+)\)",
+                             lambda m: var_of.get(int(m.group(1)),
+                                                  f"__c{m.group(1)}"),
+                             norm_formula)
+        scr = (f"range __rc = {target_ref};"
+               + "".join(binds)
+               + f"__rc = {lt_formula};")
+        _, e1 = safe_call(op.po.LT_execute, scr)
+        if e1 is not None:
+            return oerr.fail("origin_operation_error",
+                             f"列公式执行失败: {e1}", script=scr[:200],
+                             hint="检查 col(N) 列号是否存在（1 起始）与函数名")
+        # 读回验证
+        out = wks.to_list(ci)
+        n_fin = sum(1 for v in out if isinstance(v, (int, float))
+                    and v == v)
+        first_vals = [round(float(v), 8) for v in out[:5]
+                      if isinstance(v, (int, float))]
+
+        # ---- 硬失败检测：源列有数据但目标列全空 → 静默失败 ----
+        if n_fin == 0:
+            # 看源列是否有数据（判断是"公式无效"还是"源列本来就空"）
+            src_has = False
+            for m in _re.finditer(r"col\((\d+)\)", formula):
+                sj = int(m.group(1)) - 1
+                try:
+                    sv = wks.to_list(sj)
+                    if any(isinstance(v, (int, float)) and v == v for v in sv):
+                        src_has = True
+                        break
+                except Exception:
+                    pass
+            return oerr.fail(
+                "formula_no_effect",
+                f"列公式未产生任何数值（Origin 静默未赋值）: {formula!r}"
+                + (f"；已自动纠正: {', '.join(fixed_funcs)}" if fixed_funcs else "")
+                + ("；源列有数据，说明公式语法/函数名无效"
+                   if src_has else "；源列本身为空，请先填充源列"),
+                worksheet=sheet_ref, column=ci, formula=formula,
+                normalized_formula=norm_formula,
+                script=scr[:200],
+                hint="LabTalk 以 10 为底对数是 log() 不是 log10()；"
+                     "可用算子 ln/log/exp/sqrt/abs/+ - * / ^")
+
+        # numpy 抽样复核（首个有限值）：把 col(N) 换成占位变量名在 Python 重算。
+        # 注意：re.sub 的替换函数**必须返回字符串**，不能返回 ndarray
+        # （上一版直接返回数组 → "expected str instance, numpy.ndarray found"）。
+        sample = None
+        try:
+            import numpy as _np
+            arrs = {}
+            def _col_var(m):
+                j = int(m.group(1)) - 1
+                vname = f"__a{j}"
+                if vname not in arrs:
+                    arrs[vname] = _np.asarray(wks.to_list(j), dtype=float)
+                return vname
+            py_expr = _re.sub(r"col\((\d+)\)", _col_var, norm_formula)
+            # LabTalk 函数名 -> numpy（LabTalk 的 log 是底 10，numpy 对应 log10）
+            env = {"__builtins__": {}, "np": _np}
+            for lt_name, np_name in _NP_FUNC_MAP.items():
+                fn = getattr(_np, np_name, None)
+                if fn is not None:
+                    env[lt_name] = fn
+            env.update(arrs)
+            py_out = eval(py_expr, {"__builtins__": {}}, env)
+            py_out = _np.atleast_1d(_np.asarray(py_out, dtype=float))
+            fin = [k for k, v in enumerate(out)
+                   if isinstance(v, (int, float)) and v == v]
+            if fin:
+                k0 = fin[0]
+                ov = float(out[k0])
+                pv = float(py_out[k0]) if k0 < len(py_out) else float("nan")
+                match = (pv == pv
+                         and abs(ov - pv) <= max(1e-9, 1e-9 * abs(pv)))
+                sample = {"row": k0, "origin": ov, "numpy": pv,
+                          "match": bool(match),
+                          "checked": "首个有限值 numpy 独立复算"}
+        except Exception as _se:
+            sample = {"skipped": f"numpy 复核跳过: {_se}"}
+
+        detail = (f"列公式 {formula!r} -> col({ci + 1}) 完成"
+                  f"（{n_fin} 个有限值，Origin 原生计算）")
+        if fixed_funcs:
+            detail += f"；已自动纠正 {', '.join(fixed_funcs)}"
+        result = oerr.ok(worksheet=sheet_ref, column=ci,
+                         column_name=(lname or str(target)),
+                         points=len(out), finite_points=n_fin,
+                         first_values=first_vals, sample_check=sample,
+                         detail=detail)
+        if fixed_funcs:
+            result["normalized_formula"] = norm_formula
+            result["auto_fixes"] = fixed_funcs
+        # numpy 复核不一致 → 提示但不失败（可能是 LabTalk 与 numpy 的边界差异）
+        if isinstance(sample, dict) and sample.get("match") is False:
+            result["warning"] = (f"numpy 复核不一致（row {sample['row']}: "
+                                 f"Origin={sample['origin']:.6g} vs "
+                                 f"numpy={sample['numpy']:.6g}），请人工确认公式语义")
+        return result
+    except Exception as e:
+        return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
+
+
+# ---------------------------------------------------------------------------
+# 多峰拟合（核磁/XPS/拉曼/红外分峰：numpy Levenberg-Marquardt，自包含）
+# ---------------------------------------------------------------------------
+def _peak_shape(x, c, h, w, kind):
+    """单峰：h 峰高、w 半高宽 FWHM。gauss/lorentz。"""
+    import numpy as _np
+    if kind == "lorentz":
+        return h / (1.0 + 4.0 * ((x - c) / w) ** 2)
+    return h * _np.exp(-4.0 * _np.log(2.0) * ((x - c) / w) ** 2)
+
+
+def _peak_area(h, w, kind):
+    import numpy as _np
+    if kind == "lorentz":
+        return h * w * _np.pi / 2.0
+    return h * w * _np.sqrt(_np.pi / (4.0 * _np.log(2.0)))
+
+
+def _peak_fit_impl(worksheet, x_column, y_column, n_peaks=1, kind="gauss",
+                   centers_hint=None, baseline=True, plot_curve=True,
+                   graph=None, title=None, show_components=True):
+    """多峰拟合（分峰解析）。每峰返回 center/height/fwhm/area + 总拟合 R²。
+
+    初值：centers_hint 给定峰位列表；否则用 peak_find 自动探测。
+    LM 阻尼高斯牛顿迭代（数值雅可比），纯 numpy 实现，不依赖 Origin 拟合器。
+    """
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        import numpy as np
+        wks = op.find_sheet("w", worksheet)
+        if not wks:
+            return {"ok": False, "error": f"工作表不存在: {worksheet}"}
+        xi = _col_index_impl(wks, x_column)
+        yi = _col_index_impl(wks, y_column)
+        if xi is None or yi is None:
+            return {"ok": False, "error": "x/y 列不存在"}
+        xv = np.asarray(wks.to_list(xi), dtype=float)
+        yv = np.asarray(wks.to_list(yi), dtype=float)
+        mask = np.isfinite(xv) & np.isfinite(yv)
+        xv, yv = xv[mask], yv[mask]
+        kind = (kind or "gauss").lower()
+        if kind not in ("gauss", "lorentz"):
+            return oerr.fail("invalid_request", "kind 支持 gauss/lorentz")
+
+        # ---- 初值 ----
+        n_peaks = int(n_peaks or 1)
+        if centers_hint:
+            centers = [float(c) for c in centers_hint][:n_peaks]
+        else:
+            rpk = _peak_find_impl(worksheet, x_column, y_column,
+                                  min_height=float(yv.max() * 0.1),
+                                  min_distance=max(3, len(xv) // 40))
+            peaks0 = rpk.get("peaks") or []
+            centers = [float(p.get("x")) for p in peaks0][:n_peaks]
+        while len(centers) < n_peaks:     # 不够就均匀铺开
+            centers.append(float(xv[0] + (len(centers) + 1)
+                               * (xv[-1] - xv[0]) / (n_peaks + 1)))
+        yspan = float(yv.max() - yv.min())
+        # abs 取幅值：XPS/FTIR 等"结合能/波数降序"数据 x[-1]<x[0]，
+        # 负 xspan 会把 FWHM 初值钳到 1e-9 让 LM 全灭（d02 实测教训）
+        xspan = abs(float(xv[-1] - xv[0]))
+        p0 = [float(yv.min() if baseline else 0.0)]
+        for c in centers:
+            p0 += [c, max(yspan, 1e-9), max(xspan / (4.0 * n_peaks), 1e-9)]
+        p = np.asarray(p0, dtype=float)
+
+        def model(pp, x):
+            y = np.full_like(x, pp[0])
+            for i in range(n_peaks):
+                y = y + _peak_shape(x, pp[1 + 3 * i], pp[2 + 3 * i],
+                                    pp[3 + 3 * i], kind)
+            return y
+
+        # ---- LM 迭代（数值雅可比） ----
+        lam, best = 1e-3, None
+        r = yv - model(p, xv)
+        cost = float(np.dot(r, r))
+        for _ in range(300):
+            J = np.empty((xv.size, p.size))
+            for j in range(p.size):
+                dp = max(1e-8, abs(p[j]) * 1e-6)
+                pj = p.copy()
+                pj[j] += dp
+                J[:, j] = (model(pj, xv) - model(p, xv)) / dp
+            JTJ, JTr = J.T @ J, J.T @ r
+            improved = False
+            for _inner in range(20):
+                try:
+                    d = np.linalg.solve(JTJ + lam * np.diag(np.diag(JTJ)), JTr)
+                except np.linalg.LinAlgError:
+                    lam *= 10
+                    continue
+                pn = p + d
+                # 约束：fwhm>0、height 不为大负
+                for i in range(n_peaks):
+                    pn[3 + 3 * i] = abs(pn[3 + 3 * i])
+                rn = yv - model(pn, xv)
+                cn = float(np.dot(rn, rn))
+                if cn < cost:
+                    p, r, cost = pn, rn, cn
+                    lam = max(lam / 10.0, 1e-9)
+                    improved = True
+                    break
+                lam *= 10.0
+            if not improved and lam > 1e8:
+                break
+        ss_tot = float(np.dot(yv - yv.mean(), yv - yv.mean()))
+        r2 = 1.0 - cost / ss_tot if ss_tot > 0 else 0.0
+        peaks_out = []
+        for i in range(n_peaks):
+            c, h, w = p[1 + 3 * i], p[2 + 3 * i], p[3 + 3 * i]
+            peaks_out.append({"center": round(float(c), 6),
+                              "height": round(float(h), 6),
+                              "fwhm": round(float(w), 6),
+                              "area": round(float(_peak_area(h, w, kind)), 6)})
+        result = {"ok": True, "kind": kind, "n_peaks": n_peaks,
+                  "baseline": round(float(p[0]), 6),
+                  "peaks": peaks_out, "r_squared": round(r2, 6),
+                  "worksheet": str(wks),
+                  "detail": f"{n_peaks} 峰 {kind} 拟合完成，R²={r2:.5f}"}
+
+        # ---- 上图：原始散点 + 总拟合线 + 各分峰 ----
+        if plot_curve:
+            xs = np.linspace(xv[0], xv[-1], max(400, xv.size))
+            yfit = model(p, xs)
+            ws2 = op.new_sheet("w", _new_unique_name("PeakFit"))
+            ws2.from_list(0, [round(float(v), 8) for v in xs], lname="x_fit")
+            ws2.from_list(1, [round(float(v), 8) for v in yfit], lname="y_total")
+            if show_components:
+                for i in range(n_peaks):
+                    yc = _peak_shape(xs, p[1 + 3 * i], p[2 + 3 * i],
+                                     p[3 + 3 * i], kind) + p[0]
+                    ws2.from_list(2 + i, [round(float(v), 8) for v in yc],
+                                  lname=f"peak_{i + 1}")
+            if graph:
+                gp = op.find_graph(graph)
+            else:
+                gp = None
+            if gp is None:
+                gp = op.new_graph(lname=title or "PeakFit")
+            gl = gp[0]
+            gl.add_plot(wks, yi, xi, type="s")
+            gl.add_plot(ws2, 1, 0, type="l")
+            if show_components:
+                for i in range(n_peaks):
+                    gl.add_plot(ws2, 2 + i, 0, type="l")
+            gl.rescale()
+            try:
+                pls = gl.plot_list() or []
+                if pls:
+                    pls[0].symbol_size = 4
+                if len(pls) > 1:
+                    pls[1].color = (204, 26, 26)
+                for i in range(2, len(pls)):
+                    pls[i].set_int("show", 1)
+                    pls[i].color = (90, 90, 90)
+                    try:
+                        pls[i].set_cmd("-wp 1")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            result["graph"] = gp.obj.GetName()
+            result["detail"] += f"，拟合曲线已上图（{result['graph']}）"
+        return result
+    except Exception as e:
+        return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
+
+
+# ---------------------------------------------------------------------------
+# 屏蔽数据点（NaN 化隐藏错误点，不物理删除 —— 高度自定义化）
+# ---------------------------------------------------------------------------
+def _mask_points_impl(worksheet, y_column, rows=None, x_min=None, x_max=None,
+                      x_column=None, backup=True):
+    """把指定行/区间的 y 值置为 NaN（图上自动隐藏，数据可恢复）。
+
+    rows: 行号列表（0 起）；或 x_min/x_max 区间（配合 x_column）。
+    backup=True 时先把原列复制为 <name>_raw 再置 NaN（可逆）。
+    """
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        import numpy as np
+        wks = op.find_sheet("w", worksheet)
+        if not wks:
+            return {"ok": False, "error": f"工作表不存在: {worksheet}"}
+        yi = _col_index_impl(wks, y_column)
+        if yi is None:
+            return {"ok": False, "error": f"列不存在: {y_column}"}
+        yv = np.asarray(wks.to_list(yi), dtype=float)
+        n = yv.size
+        sel = np.zeros(n, dtype=bool)
+        if rows:
+            for r0 in rows:
+                try:
+                    i0 = int(r0)
+                    if 0 <= i0 < n:
+                        sel[i0] = True
+                except (TypeError, ValueError):
+                    continue
+        if x_min is not None or x_max is not None:
+            xi = _col_index_impl(wks, x_column if x_column is not None else 0)
+            if xi is None:
+                return {"ok": False, "error": "x 列不存在（区间屏蔽需要 x_column）"}
+            xv = np.asarray(wks.to_list(xi), dtype=float)
+            lo = float(x_min) if x_min is not None else -np.inf
+            hi = float(x_max) if x_max is not None else np.inf
+            sel |= (xv >= lo) & (xv <= hi)
+        n_mask = int(sel.sum())
+        if n_mask == 0:
+            # 区分"区间没命中"与"整列没数据/全 NaN"（后者多半是上游列公式未生效）
+            n_valid_y = int(np.isfinite(yv).sum())
+            if n < 1:
+                return oerr.fail(
+                    "column_empty",
+                    f"y 列没有行数据（列长度 0），无法屏蔽任何点；"
+                    f"请确认上游列公式（column_formula）是否真正写入了数据",
+                    worksheet=str(wks), y_column=str(y_column))
+            if n_valid_y == 0:
+                return oerr.fail(
+                    "column_all_nan",
+                    f"y 列 {n} 行全部为 NaN，没有可屏蔽的有效点；"
+                    f"请检查上游列公式是否真正生效",
+                    worksheet=str(wks), y_column=str(y_column), rows=n)
+            return oerr.fail("invalid_request", "没有命中任何数据点",
+                             rows=(rows or [])[:10], x_min=x_min, x_max=x_max,
+                             y_column=str(y_column), rows_total=n,
+                             valid_points=n_valid_y,
+                             hint="rows 是 0 起行号；x_min/x_max 需配合 x_column")
+        backup_col = None
+        if backup:
+            cname = _col_name_impl(wks, yi)
+            backup_col = _write_col_impl(wks, list(yv), lname=f"{cname}_raw")
+        yv[sel] = np.nan
+        wks.from_list(yi, [None if (isinstance(v, float) and v != v)
+                           else round(float(v), 10) if v == v else v
+                           for v in yv])
+        return oerr.ok(worksheet=str(wks), masked=n_mask,
+                       backup_column=backup_col,
+                       detail=(f"已屏蔽 {n_mask} 个点（置 NaN，图上隐藏）"
+                               + (f"，原值备份于 {backup_col}" if backup_col else "")))
+    except Exception as e:
+        return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
+
+
+# ---------------------------------------------------------------------------
+# 辅助线（Tafel 外推/零参考/阈值线）
+# ---------------------------------------------------------------------------
+def _add_line_impl(graph, orientation="vertical", at=None, slope=None,
+                   intercept=None, color="#D55E00", line_style=1,
+                   label=None, layer=0):
+    """在图上画辅助线。vertical/horizontal 需 at（轴截点）；slope 需
+    slope+intercept（y=slope*x+intercept）。线会进图例（条目=label 或列名）。
+    """
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        gp = op.find_graph(graph)
+        if gp is None:
+            return oerr.fail("graph_not_found", f"图不存在: {graph}", graph=graph)
+        gl, _ = safe_call(gp.__getitem__, int(layer or 0))
+        if gl is None:
+            return oerr.fail("layer_not_found", f"图层不存在: {layer}",
+                             graph=graph)
+        orientation = (orientation or "vertical").lower()
+        try:
+            xl = gl.axis("x").limits
+            yl = gl.axis("y").limits
+        except Exception:
+            xl = yl = None
+        xs, ys = None, None
+        if orientation == "vertical":
+            if at is None:
+                return oerr.fail("invalid_request", "vertical 需要 at（x 截点）")
+            y0, y1 = (float(yl[0]), float(yl[1])) if yl else (0.0, 1.0)
+            xs, ys = [float(at), float(at)], [y0, y1]
+        elif orientation == "horizontal":
+            if at is None:
+                return oerr.fail("invalid_request", "horizontal 需要 at（y 截点）")
+            x0, x1 = (float(xl[0]), float(xl[1])) if xl else (0.0, 1.0)
+            xs, ys = [x0, x1], [float(at), float(at)]
+        elif orientation == "slope":
+            if slope is None or intercept is None:
+                return oerr.fail("invalid_request",
+                                 "slope 线需要 slope + intercept")
+            x0, x1 = (float(xl[0]), float(xl[1])) if xl else (0.0, 1.0)
+            xs = [x0, x1]
+            ys = [float(slope) * x0 + float(intercept),
+                  float(slope) * x1 + float(intercept)]
+        else:
+            return oerr.fail("invalid_request",
+                             "orientation 支持 vertical/horizontal/slope")
+        ws = op.new_sheet("w", _new_unique_name("RefLine"))
+        ws.from_list(0, xs, lname="ref_x")
+        ws.from_list(1, ys, lname=str(label or "reference"))
+        pl = gl.add_plot(ws, 1, 0, type="l")
+        try:
+            pl.color = _hex_to_rgb_tuple(color)
+        except Exception:
+            pass
+        try:
+            pl.set_int("linestyle", int(line_style))
+        except Exception:
+            pass
+        if label:
+            try:
+                gl.add_label(str(label), xs[1] if orientation == "vertical"
+                             else xs[0], ys[0] if orientation != "vertical"
+                             else ys[1])
+            except Exception:
+                pass
+        return oerr.ok(graph=graph, orientation=orientation,
+                       points=[xs, ys],
+                       detail=f"辅助线已画（{orientation}"
+                              f"{f' at={at}' if at is not None else ''}）-> {graph}")
+    except Exception as e:
+        return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
+
+
+# ---------------------------------------------------------------------------
+# 任意 LabTalk 执行（逃生舱；带激活 + 读回 + NaN 防护）
+# ---------------------------------------------------------------------------
+def _labtalk_impl(script, read_expr=None, graph=None, read_kind="auto"):
+    """执行一段 LabTalk 并可选读回表达式值（带激活复核与 NaN 判定）。
+
+    这是给高级用户的逃生舱：SKILL 里没有覆盖到的 Origin 功能可由此直达。
+    graph 给定且非空时先激活该图页（否则 LabTalk 裸表达式可能静默落到
+    错误窗口 —— 通道纪律，见 SKILL 附录 C）。
+    read_expr: 如 "layer.x.from"、"page.nlayers"、'layer.y.title$'。
+    """
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        # 阻塞型命令防护（d15 实测：type -b 弹模态对话框把 Origin 卡死 10 分钟，
+        # COM 全程无响应，只能 GUI 点击解除）。逃生舱不放火烧船。
+        low = str(script).lower()
+        for bad in ("type -b", "type -a", "dlg.", "dlg ", "getn", "getstr"):
+            if bad in low:
+                return oerr.fail(
+                    "invalid_request",
+                    f"脚本含阻塞型命令 {bad.strip()!r}（会弹模态对话框卡死 Origin）",
+                    script=str(script)[:200],
+                    next_actions=["改用纯计算/赋值命令；交互式弹窗只能在 Origin 内手动操作"])
+        activated = None
+        if graph:
+            import origin_edit as _oedit
+            _, aerr = _oedit.ensure_active_graph(op, op.po, graph)
+            if aerr is not None:
+                return oerr.fail("window_activation_failed",
+                                 f"目标图页激活失败: {aerr}", graph=graph,
+                                 next_actions=["origin_list_pages 复核短名后重试"])
+            activated = True
+        _, e1 = safe_call(op.po.LT_execute, str(script))
+        if e1 is not None:
+            return oerr.fail("origin_operation_error",
+                             f"LabTalk 执行失败: {e1}",
+                             script=str(script)[:200])
+        out = {"ok": True, "executed": True, "graph": graph,
+               "activated": activated}
+        if read_expr:
+            expr = str(read_expr)
+            is_str = expr.endswith("$")
+            if read_kind == "str":
+                is_str = True
+            elif read_kind == "float":
+                is_str = False
+            if is_str:
+                v = _lt_read_str(expr)
+            else:
+                v = _lt_read_float(expr)
+            if isinstance(v, float) and v != v:  # NaN 自比较判定（无 import 依赖）
+                out["readback"] = None
+                out["readback_status"] = "nan_unreliable"
+                out["detail"] = ("读回为 NaN：该表达式在当前上下文未解析"
+                                 "（检查 graph 是否活动窗口 / 属性名是否正确）")
+            elif v is None:
+                out["readback"] = None
+                out["readback_status"] = "unreadable"
+            else:
+                out["readback"] = v
+                out["readback_status"] = "ok"
+                out["detail"] = f"执行完成，{expr} = {v!r}"
+        else:
+            out["detail"] = "LabTalk 已执行（无读回请求；建议带 read_expr 复核）"
+        return out
     except Exception as e:
         return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
 
@@ -1153,6 +1998,11 @@ def _write_col_impl(wks, data, lname=None):
         return str(ncol)
 
 
+# 自研统计的科学边界（#9）：探索性结论可用，正式发表需专业软件复核
+CONFIDENCE_NOTE = ("本结果由插件内置统计实现（numpy）快速计算，仅供探索性分析与图表初稿；"
+                   "正式发表前请用 SPSS/R 或 Origin 原生统计功能复核。")
+
+
 def _stats_impl(worksheet, columns=None):
     try:
         ok, conn = _connect_impl()
@@ -1188,6 +2038,7 @@ def _stats_impl(worksheet, columns=None):
                 "skew": float(__skew_impl(v)) if v.size > 2 else 0.0,
             }
         return {"ok": True, "worksheet": str(wks), "stats": out,
+                "confidence_note": CONFIDENCE_NOTE,
                 "detail": "描述统计完成（count/mean/std/min/p25/median/p75/max/skew）"}
     except Exception as e:
         return {"ok": False, "error": f"{e}", "trace": traceback.format_exc(limit=3)}
@@ -1474,6 +2325,7 @@ def _correlate_impl(worksheet, columns=None):
             "columns": used,
             "correlation": [[float(x) for x in row] for row in corr],
             "rows_used": int(minlen),
+            "confidence_note": CONFIDENCE_NOTE,
             "detail": f"Pearson 相关矩阵（{len(used)} 列）{note}",
         }
     except Exception as e:
@@ -1715,6 +2567,8 @@ def _help_impl():
             "origin_survival": "Kaplan-Meier 生存分析（时间列+事件列）",
             "origin_list_graphs": "列出项目图页短名",
             "origin_error_codes": "列出全部稳定错误码与恢复建议",
+            "origin_diagnose": "系统级自检：Origin 安装/COM 注册/残留进程/导出目录权限（连接失败先调它）",
+            "origin_cookbook": "场景→工具组合速查：常见调用链 + 推荐默认参数 + 快速/正式路径",
         },
         "templates": [
             "折线图: origin_plot_file(columns, plot_type='line')",
@@ -1967,10 +2821,18 @@ def _apply_style_impl(graph, plot_type=None, columns=None, style_mode="default",
 
 
 def _find_wks_of_plot(gl):
+    """从图层第一条曲线的 dataset 名（如 "Book1_B"）解析出其工作簿。
+
+    originpro plot 对象没有 ws 属性（probe 实证全是 None），
+    唯一可靠通道是 p.name 的 "BookN_列" 前缀。
+    """
     try:
         pl = gl.plot_list() or []
         if pl:
-            return pl[0].ws
+            nm = getattr(pl[0], "name", None)
+            if nm:
+                book = str(nm).split("_")[0].split("]")[0].strip("[")
+                return _origin_app.find_sheet("w", book)
     except Exception:
         pass
     return None
@@ -2012,7 +2874,8 @@ def _ttest_impl(worksheet, column_a, column_b=None, kind="two", paired=False, mu
         if not r.get("ok"):
             return oerr.fail("empty_data", r.get("error"))
         return oerr.ok(worksheet=str(wks), column_a=str(column_a),
-                       column_b=str(column_b) if column_b else None, **r)
+                       column_b=str(column_b) if column_b else None,
+                       confidence_note=CONFIDENCE_NOTE, **r)
     except Exception as e:
         return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
 
@@ -2041,7 +2904,8 @@ def _anova_impl(worksheet, columns):
         r = oana.anova_oneway(groups)
         if not r.get("ok"):
             return oerr.fail("empty_data", r.get("error"))
-        return oerr.ok(worksheet=str(wks), columns=used, **r)
+        return oerr.ok(worksheet=str(wks), columns=used,
+                       confidence_note=CONFIDENCE_NOTE, **r)
     except Exception as e:
         return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
 
@@ -2077,7 +2941,7 @@ def _pca_impl(worksheet, columns=None, scale=False, n_components=None):
             return oerr.fail("empty_data", r.get("error"))
         # r 已含 n_samples / n_features / n_components 等，勿重复传同名键
         return oerr.ok(worksheet=str(wks), columns=used,
-                       n_columns=len(used), **r)
+                       n_columns=len(used), confidence_note=CONFIDENCE_NOTE, **r)
     except Exception as e:
         return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
 
@@ -2101,7 +2965,8 @@ def _survival_impl(worksheet, time_column, event_column):
         if not r.get("ok"):
             return oerr.fail("empty_data", r.get("error"))
         return oerr.ok(worksheet=str(wks), time_column=str(time_column),
-                       event_column=str(event_column), **r)
+                       event_column=str(event_column),
+                       confidence_note=CONFIDENCE_NOTE, **r)
     except Exception as e:
         return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
 
@@ -2172,11 +3037,241 @@ def _list_graphs_impl():
 
 
 def _error_codes_impl():
-    """列出全部稳定错误码与恢复建议。"""
+    """列出全部稳定错误码、恢复建议与恢复动作映射。"""
     out = {}
     for code, (recoverable, actions) in oerr.CODE_META.items():
-        out[code] = {"recoverable": recoverable, "next_actions": actions}
+        out[code] = {"recoverable": recoverable, "next_actions": actions,
+                     "recovery": oerr.recovery_info(code)}
     return oerr.ok(error_codes=out, count=len(out))
+
+
+# ---------------------------------------------------------------------------
+# 系统级诊断（#5）：不依赖 COM 连接，连接/导出失败时先跑它定位
+# ---------------------------------------------------------------------------
+_ORIGIN_INSTALL_GLOBS = [
+    r"C:\Program Files\OriginLab\Origin*\Origin64.exe",
+    r"C:\Program Files (x86)\OriginLab\Origin*\Origin64.exe",
+    r"D:\Program Files\OriginLab\Origin*\Origin64.exe",
+    r"C:\OriginLab\Origin*\Origin64.exe",
+]
+
+
+def _probe_com_registration():
+    """只读注册表探测 COM 注册（不启动 Origin，无副作用）。"""
+    try:
+        import winreg
+        for key in ("Origin.ApplicationSI", "Origin.Application"):
+            try:
+                with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, key):
+                    return True, f"HKCR\\{key} 已注册"
+            except OSError:
+                continue
+        return False, "HKCR 未找到 Origin.ApplicationSI / Origin.Application（COM 组件未注册）"
+    except Exception as e:      # 非 Windows / 权限受限环境
+        return None, f"注册表探测失败: {type(e).__name__}: {e}"
+
+
+def _probe_dir_writable(path):
+    """探针文件法验证目录可写（创建-写入-删除）。"""
+    try:
+        os.makedirs(path, exist_ok=True)
+        probe = os.path.join(path, f".dsh_write_probe_{uuid.uuid4().hex[:6]}.tmp")
+        with open(probe, "w", encoding="utf-8") as fh:
+            fh.write("probe")
+        os.remove(probe)
+        return True, "可写"
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+
+
+def _diagnose_impl(connect_probe=False):
+    """系统级自检：Origin 安装 / COM 注册 / 残留进程 / 导出目录权限 / 环境策略。"""
+    report = {"ok": True, "checks": {}, "recommendations": []}
+    checks = report["checks"]
+    recs = report["recommendations"]
+
+    # 1) Origin 安装探测
+    import glob as _glob
+    installs = []
+    for pattern in _ORIGIN_INSTALL_GLOBS:
+        try:
+            installs.extend(_glob.glob(pattern))
+        except Exception:
+            pass
+    checks["origin_install"] = {
+        "found": bool(installs), "exes": installs,
+        "note": None if installs else "常见路径未找到 Origin64.exe",
+    }
+    if not installs:
+        recs.append("未在常见安装路径找到 Origin64.exe：确认已安装 OriginLab Origin，"
+                    "或把实际安装路径告知支持人员")
+
+    # 2) Origin 进程状态 + 自动清理策略
+    nproc = _origin_proc_count()
+    checks["origin_processes"] = {"count": nproc, "running": bool(nproc)}
+    checks["autokill"] = {
+        "enabled": _autokill_enabled(),
+        "env_DSH_ORIGIN_AUTOKILL": os.environ.get("DSH_ORIGIN_AUTOKILL"),
+    }
+    if nproc and nproc > 1:
+        recs.append(f"检测到 {nproc} 个 Origin64 进程：多实例会让 COM 连错实例，"
+                    "taskkill /F /IM Origin64.exe 清理后等 2 秒再重连"
+                    "（或设置 DSH_ORIGIN_AUTOKILL=1 让引擎连接前自动清理）")
+
+    # 3) COM 注册探测（只读，无副作用）
+    com_ok, com_detail = _probe_com_registration()
+    checks["com_registration"] = {"ok": com_ok, "detail": com_detail}
+    if com_ok is False:
+        recs.append("Origin COM 组件未注册：重装/修复 Origin，或以管理员运行一次 Origin")
+
+    # 4) 引擎连接状态（不主动连接）
+    checks["engine_connected"] = {"connected": bool(_connected and _origin_app),
+                                  "com_thread_alive": bool(_com_thread and _com_thread.is_alive())}
+    checks["env_policy"] = {
+        "ORIGIN_SESSION": os.environ.get("ORIGIN_SESSION", "attach（默认）"),
+        "DSH_ORIGIN_AUTOKILL": os.environ.get("DSH_ORIGIN_AUTOKILL") or "未设置",
+        "DSH_ORIGIN_NO_AUTO_SAVE": os.environ.get("DSH_ORIGIN_NO_AUTO_SAVE") or "未设置",
+        "DSH_ORIGIN_IPC_LOCK": os.environ.get("DSH_ORIGIN_IPC_LOCK") or "未设置",
+    }
+
+    # 5) 默认导出目录可写性
+    dir_ok, dir_detail = _probe_dir_writable(DEFAULT_OUTPUT_DIR)
+    checks["export_dir"] = {"path": DEFAULT_OUTPUT_DIR,
+                            "writable": dir_ok, "detail": dir_detail}
+    if not dir_ok:
+        recs.append(f"默认导出目录不可写（{dir_detail}）：导出时显式传 file_path 或 output_dir")
+
+    # 6) 可选：真实连接探针（会启动/连接 Origin，5~45 秒）
+    if connect_probe:
+        rconn = connect()
+        if isinstance(rconn, tuple) and len(rconn) == 2 and isinstance(rconn[1], dict):
+            rconn = rconn[1]
+        checks["connect_probe"] = rconn
+        if isinstance(rconn, dict) and not rconn.get("ok"):
+            report["ok"] = False
+
+    report["recommendations"] = recs
+    return report
+
+
+# ---------------------------------------------------------------------------
+# 场景速查（#22/#20/#23）：常见调用链 + 推荐默认参数 + 快速/正式路径
+# ---------------------------------------------------------------------------
+_COOKBOOK_SCENARIOS = {
+    "quick_plot": {
+        "title": "快速出图（最快路径，数据已在手上）",
+        "steps": [
+            "origin_plot_file(columns={'x':[..], 'y':[..]}, plot_type='line_symbol', "
+            "fmt='png', width=1200, title='可选')",
+            "返回 {'ok': true, 'file': 绝对路径} 即完成；需要微调再走 origin_edit_*",
+        ],
+    },
+    "from_file": {
+        "title": "从 CSV/Excel 导入并画图",
+        "steps": [
+            "origin_load_file(path='D:/data/样品1.csv') -> 看列画像与角色建议",
+            "origin_plot(worksheet, y_columns=[..], x_column=.., plot_type='line_symbol')",
+            "origin_export(graph, fmt='png', width=1200)",
+        ],
+    },
+    "journal": {
+        "title": "发表级图表（正式路径：plan → 确认 → execute → verify → delivery）",
+        "steps": [
+            "origin_plot_plan(columns=...) -> 逐列画像 + 待确认问题（plan_id + plan_hash）",
+            "有 questions 先向用户确认，再 origin_execute_plan(plan_id)",
+            "origin_verify_graph(graph) 确定性反读核验（轴标题/字号/图例/文件完整性）",
+            "origin_export_delivery(graph, source_path=数据文件, fmts='png,pdf') 一键交付",
+            "export_delivery 默认自动保存 OPJU；若设置了 DSH_ORIGIN_NO_AUTO_SAVE=1，"
+            "请提醒用户在 Origin 内按 Ctrl+S 手动保存",
+        ],
+    },
+    "multi_compare": {
+        "title": "多组数据对比（语义不明确时必须先 plan 确认）",
+        "steps": [
+            "origin_plot_plan(columns={...多列...}) -> 确认列角色/分组语义",
+            "origin_execute_plan(plan_id)",
+            "origin_apply_style(graph, style_mode='group', family='..') 区分多序列",
+            "origin_verify_graph(graph)",
+        ],
+    },
+    "edit": {
+        "title": "微调已有图",
+        "steps": [
+            "origin_inspect_graph(graph) 看现状（几何/曲线/轴/图例）",
+            "origin_edit_plot / origin_edit_axis / origin_edit_legend / origin_edit_page",
+            "origin_view_graph(graph) 内联预览确认效果",
+        ],
+    },
+    "fit": {
+        "title": "拟合与统计分析",
+        "steps": [
+            "origin_write_data 或 origin_load_file 准备数据",
+            "origin_fit(worksheet, kind='linear'|'ExpDec1'|'Gauss'...) -> 拟合曲线上图",
+            "origin_stats / origin_ttest / origin_anova / origin_pca 按需",
+            "注意：自研统计结果仅作快速探索，正式发表请用 SPSS/R/Origin 原生复核",
+        ],
+    },
+    "recover": {
+        "title": "失败恢复速查（error_code → 动作）",
+        "steps": [
+            "读失败返回的 error_code + recovery.policy + recovery.diagnose",
+            "connection_error / origin_operation_error → origin_diagnose 定位，"
+            "必要时 taskkill /F /IM Origin64.exe 等 2 秒重连",
+            "graph/worksheet/column not found → origin_list_graphs / origin_status 复核",
+            "export_error → 看返回 attempts 字段确认三级导出通道失败原因",
+            "仍失败：同一问题 2 轮修复未果时停止重试，如实报告用户",
+        ],
+    },
+    "deliver": {
+        "title": "保存工程与交付",
+        "steps": [
+            "origin_export_delivery(graph, source_path=.., fmts='png,pdf') 一键交付",
+            "或 origin_save_project(path) 单独保存 OPJU（可编辑工程）",
+            "DSH_ORIGIN_NO_AUTO_SAVE=1 时工具不自动写 .opju，改提示 Ctrl+S",
+        ],
+    },
+}
+
+# 高频工具推荐默认参数（#20）：模型不指定时按这里出合理结果
+_COOKBOOK_DEFAULTS = {
+    "origin_plot_file": {"plot_type": "line_symbol", "fmt": "png", "width": 1200},
+    "origin_plot": {"plot_type": "line_symbol", "style_mode": "default"},
+    "origin_export": {"fmt": "png", "width": 1200},
+    "origin_plot_template": {"fmt": "png", "width": 1200, "legend_mode": "auto"},
+    "origin_plot3d": {"plot_type": "surface", "fmt": "png", "width": 1200},
+    "origin_histogram": {"bins": 10, "plot": True, "fmt": "png"},
+    "origin_fit": {"kind": "linear", "plot_result": True},
+    "origin_export_delivery": {"fmts": "png,pdf", "width": 1200, "export_data_csv": True},
+    "语义规范": {
+        "折线/散点默认": "line_symbol（点线结合，审稿友好）",
+        "期刊风格": "journal 模板 + 300dpi 等效宽度（export width>=1800）",
+        "轴标题": "语义化（物理量 + 单位，如 'Time (s)'），拒绝 A/B/C 占位名",
+    },
+}
+
+# 两条主路径（#23）
+_COOKBOOK_PATHS = {
+    "快速路径": "origin_plot_file / origin_load_file+origin_plot —— 数据语义明确、"
+               "临时查看时使用，一次调用出图",
+    "正式路径": "origin_plot_plan → 用户确认 → origin_execute_plan → origin_verify_graph "
+               "→ origin_export_delivery —— 发表级/多组对比/列语义不明时强制使用",
+}
+
+
+def _cookbook_impl(scenario=""):
+    """场景 → 工具组合速查（离线秒回）。scenario 支持前缀匹配。"""
+    if scenario:
+        key = str(scenario).strip().lower()
+        hit = {k: v for k, v in _COOKBOOK_SCENARIOS.items() if k.startswith(key)}
+        if not hit:
+            return oerr.fail(
+                "invalid_request",
+                f"未知场景 {scenario!r}",
+                available=sorted(_COOKBOOK_SCENARIOS),
+                next_actions=["留空 scenario 返回全部场景，选一个 key 再查"])
+        return oerr.ok(scenarios=hit, defaults=_COOKBOOK_DEFAULTS, paths=_COOKBOOK_PATHS)
+    return oerr.ok(scenarios=_COOKBOOK_SCENARIOS, defaults=_COOKBOOK_DEFAULTS,
+                   paths=_COOKBOOK_PATHS, count=len(_COOKBOOK_SCENARIOS))
 
 
 # ---------------------------------------------------------------------------
@@ -2218,6 +3313,15 @@ def _save_project_impl(path):
         op = _origin_app
         if not path:
             return oerr.fail("invalid_request", "path 不能为空")
+        # 保存策略开关（#3）：DSH_ORIGIN_NO_AUTO_SAVE=1 时禁止脚本自动写 .opju，
+        # 改为提示用户在 Origin 内按 Ctrl+S 手动保存（防止自动化覆盖/锁定用户工程）。
+        if os.environ.get("DSH_ORIGIN_NO_AUTO_SAVE", "").strip().lower() in \
+                ("1", "true", "on", "yes"):
+            return oerr.fail(
+                "manual_save_required",
+                "已按策略（DSH_ORIGIN_NO_AUTO_SAVE=1）禁止脚本自动保存 .opju 项目文件",
+                hint="请在 Origin 窗口按 Ctrl+S 手动保存当前项目；"
+                     "如需恢复自动保存，取消该环境变量后重试")
         path = os.path.abspath(str(path))
         if not path.lower().endswith((".opju", ".ogg", ".opj")):
             path += ".opju"
@@ -2257,9 +3361,11 @@ def _save_project_impl(path):
 
 
 def _export_delivery_impl(graph, source_path=None, output_dir=None, fmts="png,pdf",
-                          width=1200, save_opju=True):
+                          width=1200, save_opju=True, report_text=None,
+                          export_data_csv=True):
     """一键交付：源文件同级建 <数据名>_Origin_<时间戳>/ 目录，
-    导出多格式图片 + OPJU，并逐文件核验完整性。"""
+    导出多格式图片 + OPJU + （v2.3.0 新增）图对应工作表数据 csv + 分析报告
+    txt（图表一体交付），并逐文件核验完整性。"""
     try:
         ok, conn = _connect_impl()
         if not ok:
@@ -2305,14 +3411,64 @@ def _export_delivery_impl(graph, source_path=None, output_dir=None, fmts="png,pd
             r2 = _save_project_impl(os.path.join(ddir, f"{safe_g}_{ts}.opju"))
             if r2.get("ok"):
                 opju = r2["file"]
+            elif r2.get("error_code") == "manual_save_required":
+                issues.append("OPJU 未自动保存（DSH_ORIGIN_NO_AUTO_SAVE=1 策略）："
+                              "请在 Origin 窗口按 Ctrl+S 手动保存")
             else:
                 issues.append(f"OPJU 保存失败: {r2.get('error')}")
         n_ok = sum(1 for f in files if f.get("ok"))
+        # v2.3.0 图表一体交付：数据 csv + 分析报告 txt
+        data_csv = None
+        if export_data_csv:
+            try:
+                import csv as _csv
+                gp_ = _origin_app.find_graph(graph)
+                src_wks = None
+                if gp_ is not None:
+                    for li in range(int(gp_.obj.Layers.Count)):
+                        src_wks = _find_wks_of_plot(gp_.__getitem__(li))
+                        if src_wks is not None:
+                            break
+                if src_wks is not None:
+                    ncol = int(src_wks.obj.Cols)
+                    names = []
+                    cols_data = []
+                    for ci in range(ncol):
+                        nm = None
+                        try:
+                            nm = src_wks.obj[ci].GetLongName() or f"col{ci + 1}"
+                        except Exception:
+                            nm = f"col{ci + 1}"
+                        names.append(str(nm))
+                        cols_data.append(src_wks.to_list(ci))
+                    nrow = max((len(c) for c in cols_data), default=0)
+                    data_csv = os.path.join(ddir, "data.csv")
+                    with open(data_csv, "w", newline="", encoding="utf-8-sig") as fcsv:
+                        wcsv = _csv.writer(fcsv)
+                        wcsv.writerow(names)
+                        for r_ in range(nrow):
+                            wcsv.writerow([
+                                c[r_] if r_ < len(c) else "" for c in cols_data])
+            except Exception as _dc:
+                issues.append(f"数据 csv 导出失败: {_dc}")
+                data_csv = None
+        report_txt = None
+        if report_text:
+            try:
+                report_txt = os.path.join(ddir, "report.txt")
+                with open(report_txt, "w", encoding="utf-8") as frt:
+                    frt.write(str(report_text))
+            except Exception as _rt:
+                issues.append(f"报告 txt 写入失败: {_rt}")
+                report_txt = None
         return oerr.ok(
             delivery_dir=ddir, files=files, opju=opju, issues=issues,
+            data_csv=data_csv, report_txt=report_txt,
             all_ok=(not issues),
             detail=(f"交付目录 {ddir}（图片 {n_ok}/{len(files)} + "
-                    f"{'OPJU' if opju else '无 OPJU'}）"
+                    f"{'OPJU' if opju else '无 OPJU'}"
+                    f"{' + data.csv' if data_csv else ''}"
+                    f"{' + report.txt' if report_txt else ''}）"
                     + ("；存在问题：" + "; ".join(issues) if issues else "")))
     except Exception as e:
         return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
@@ -2431,7 +3587,38 @@ def _validate_template_data(template_id, data):
         for k in ("effect", "ci_low", "ci_high"):
             if len(data[k]) != n:
                 return None, oerr.fail("invalid_request",
-                                       f"{k} 与 labels 长度不一致", template=t)
+                                       f"{k} 长度必须与 labels 一致", template=t)
+    elif t == "cycle_overlay":
+        if not need_list("x"):
+            return None, oerr.fail("invalid_request",
+                                   "cycle_overlay 需要 data['x'] 为非空列表",
+                                   template=t, received_keys=sorted(data))
+        se = data.get("series")
+        if not (isinstance(se, dict) and len(se) >= 2):
+            return None, oerr.fail(
+                "invalid_request",
+                "cycle_overlay 需要 data['series'] 为 {'曲线名': [..], ...}（≥2 条）",
+                template=t, received_keys=sorted(data))
+        nx = len(data["x"])
+        for k, v in se.items():
+            if not isinstance(v, (list, tuple)) or len(v) != nx:
+                return None, oerr.fail(
+                    "invalid_request",
+                    f"曲线 {k!r} 长度必须与 x 一致", template=t)
+        lm = str(data.get("legend_mode") or "all").lower()
+        if lm not in ("all", "first_last", "none"):
+            return None, oerr.fail(
+                "invalid_request",
+                "legend_mode 支持 all/first_last/none", template=t)
+    elif t == "eis_nyquist":
+        for k in ("z_real", "z_imag"):
+            if not need_list(k):
+                return None, oerr.fail(
+                    "invalid_request", f"eis_nyquist 需要 data['{k}'] 为非空列表",
+                    template=t, received_keys=sorted(data))
+        if len(data["z_real"]) != len(data["z_imag"]):
+            return None, oerr.fail("invalid_request",
+                                   "z_real 与 z_imag 长度不一致", template=t)
     elif t == "multi_panel":
         if not isinstance(data.get("panels"), dict) or not data.get("panels"):
             return None, oerr.fail(
@@ -2833,6 +4020,109 @@ def _plot_template_impl(template_id, data, graph_name=None, title=None,
                         detail=f"forest 完成：{n} 项研究（点 + CI 线 + 零参考线，"
                                f"图例仅含效应量行），{n_label} 个研究名逐行标注"
                                f" -> {short}")
+        elif t == "cycle_overlay":
+            # 多曲线同图叠放 + 渐变色（CV 多圈/充放电多循环/动力学多轮次）。
+            # 与 stacked_spectra 的差别：不做纵向偏移，强调"同一张图上好看地
+            # 放很多条曲线"。legend_mode: all | first_last | none。
+            x = _flist(data["x"])
+            series = {str(k): _flist(v) for k, v in data["series"].items()}
+            names = list(series)
+            cols = {"x": x}
+            for nm in names:
+                cols[nm] = series[nm]
+            w = _write_data_impl(cols)
+            if not w.get("ok"):
+                return w
+            wsobj = op.find_sheet("w", w["worksheet"])
+            lname = _ensure_graph_name(graph_name, title or "CycleOverlay")
+            gp = op.new_graph(lname=lname)
+            gl = gp[0]
+            for i in range(1, len(cols)):
+                gl.add_plot(wsobj, i, 0, type="l")
+            gl.rescale()
+            short = gp.obj.GetName()
+            style = _apply_style_impl(short, plot_type="line", columns=names,
+                                      style_mode=style_mode, family=family,
+                                      apply_axis_titles=False)
+            # 渐变色（默认开：叠放图的价值就在颜色层次）
+            # 注意：pl.color 写入 + 同任务内 expGraph 会令该页 DataPlots 枚举
+            # 事后失效（曲线与颜色都在，仅 COM 枚举坏）——导出已由公共层拆到
+            # 独立 COM 任务执行（probe: gradient+export 同任务必坏，分任务必好）
+            import plot_style as _pst
+            try:
+                pal = _pst.choose_palette(len(names), family=family)["colors"]
+                c0, c1 = _hex_to_rgb_tuple(pal[0]), _hex_to_rgb_tuple(pal[-1])
+                pls = gl.plot_list() or []
+                for i, pl in enumerate(pls):
+                    t_ = i / max(1, len(pls) - 1)
+                    pl.color = tuple(
+                        int(c0[k] + (c1[k] - c0[k]) * t_) for k in range(3))
+            except Exception:
+                pass
+            import origin_edit as _oedit
+            title_checks = {}
+            for ax, txt in (("x", x_title), ("y", y_title)):
+                if txt:
+                    title_checks[ax] = _oedit.set_axis_title_checked(
+                        gl, ax, txt, po=op.po, graph=short)
+            legend_mode = str(data.get("legend_mode") or "all").lower()
+            try:
+                if legend_mode == "none":
+                    _oedit.edit_legend(op, op.po, short, visible=False)
+                elif legend_mode == "first_last" and len(names) >= 2:
+                    esc1 = names[0].replace('"', '\\"')
+                    esc2 = names[-1].replace('"', '\\"')
+                    op.po.LT_execute(
+                        f'legend.text$ = "\\l(1) {esc1}\\n\\l({len(names)}) {esc2}";')
+            except Exception:
+                pass
+            r = oerr.ok(graph=short, template=t, series=names,
+                        legend_mode=legend_mode, style=style,
+                        axis_titles={k: v.get("readback") for k, v in
+                                     title_checks.items()},
+                        detail=(f"cycle_overlay 完成：{len(names)} 条曲线同图叠放"
+                                f"（渐变色，图例 {legend_mode}）-> {short}"))
+            _bad_titles = [k for k, v in title_checks.items() if not v.get("ok")]
+            if _bad_titles:
+                r["warning"] = (f"轴标题写回未通过读回验证: {_bad_titles}；"
+                                "图上可能仍显示占位符")
+        elif t == "eis_nyquist":
+            # 电化学阻抗谱 Nyquist 图（-Z'' vs Z'，等轴比是判读半圆的前提）
+            zr = _flist(data["z_real"])
+            zi = _flist(data["z_imag"])
+            zi_neg = [-v if np.isfinite(v) else float("nan") for v in zi]
+            w = _write_data_impl({"z_real": zr, "neg_z_imag": zi_neg})
+            if not w.get("ok"):
+                return w
+            wsobj = op.find_sheet("w", w["worksheet"])
+            lname = _ensure_graph_name(graph_name, title or "EIS-Nyquist")
+            gp = op.new_graph(lname=lname)
+            gl = gp[0]
+            gl.add_plot(wsobj, 1, 0, type="y")     # 线+符号
+            gl.rescale()
+            short = gp.obj.GetName()
+            # 等轴比：两轴 span 对齐 + 图层几何近正方形
+            try:
+                xr = max(zr) - min(zr)
+                yr = max(zi_neg) - min(zi_neg)
+                span = max(xr, yr, 1e-9)
+                cx, cy = (max(zr) + min(zr)) / 2, (max(zi_neg) + min(zi_neg)) / 2
+                gl.axis("x").sfrom = float(cx - span / 2 * 1.1)
+                gl.axis("x").sto = float(cx + span / 2 * 1.1)
+                gl.axis("y").sfrom = float(cy - span / 2 * 1.1)
+                gl.axis("y").sto = float(cy + span / 2 * 1.1)
+                _set_layer_geometry(gl, left=14.0, top=8.0,
+                                    width=62.0, height=62.0)
+            except Exception:
+                pass
+            import origin_edit as _oedit
+            _oedit.set_axis_title_checked(gl, "x", x_title or "Z' (Ω)", po=op.po)
+            _oedit.set_axis_title_checked(gl, "y", y_title or "-Z'' (Ω)", po=op.po)
+            style = _apply_style_impl(short, plot_type="line_symbol",
+                                      columns=["Z"], style_mode=style_mode,
+                                      family=family, apply_axis_titles=False)
+            r = oerr.ok(graph=short, template=t, style=style,
+                        detail=f"eis_nyquist 完成（等轴比）-> {short}")
         elif t == "multi_panel":
             panels = {str(k): _flist(v) for k, v in data["panels"].items()}
             names = list(panels)
@@ -2906,25 +4196,28 @@ def _plot_template_impl(template_id, data, graph_name=None, title=None,
         else:  # 防御分支（理论上已被 _validate_template_data 拦截）
             return oerr.fail("invalid_request", f"未知 template_id: {template_id!r}")
 
-        if fmt or file_path:
-            rex = _export_impl(r["graph"], file_path=file_path, fmt=fmt or "png",
-                               width=width)
-            if rex.get("ok"):
-                r["file"] = rex["file"]
-                r["size"] = rex["size"]
-                r["format"] = rex["format"]
-            else:
-                r["warning"] = f"导出失败: {rex.get('error')}"
+        # 注意：此处**不做内联导出**。真机实证（2026-09-16 probe RB/B/DBG）：
+        # 模板内对 plot 逐条设色（pl.color → layer 域 LabTalk plotN.color）后
+        # 若在同一 COM 任务内执行 expGraph，该页 DataPlots 的 COM 枚举会失效
+        # （曲线/颜色/导出 PNG 全部正常，仅事后 plot_list() 读回为空，
+        # verify_graph 会因此误报 series_count=0）。导出由公共层
+        # plot_template 拆分为独立 COM 任务执行 —— 分任务导出实证必好。
         return r
     except Exception as e:
         return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+@_synchronized
+def _plot_template_export_task(graph, file_path, fmt, width):
+    """独立 COM 任务执行模板导出（见 _plot_template_impl 尾注）。"""
+    return _export_impl(graph, file_path=file_path, fmt=fmt, width=width)
 
 
 # ---------------------------------------------------------------------------
 # 计划执行（P1）：origin_plot_plan 缓存的计划 -> 写数/画图/导出
 # ---------------------------------------------------------------------------
 def _execute_plan_impl(plan_id, fmt=None, file_path=None, graph_name=None,
-                       width=1200):
+                       width=1200, expect_hash=None, force=False):
     try:
         import origin_plan as oplan
         plan = oplan.get_plan(plan_id)
@@ -2933,6 +4226,10 @@ def _execute_plan_impl(plan_id, fmt=None, file_path=None, graph_name=None,
                              f"plan_id 不存在或已过期（服务端缓存容量 "
                              f"{oplan.PLAN_CACHE_MAX}，重启后清空）",
                              hint="重新调用 origin_plot_plan 生成")
+        # 计划陈旧校验（#7）：缓存完整性 / plan_hash 匹配 / 是否有更新的同签名计划
+        stale = oplan.check_stale(plan, expect_hash=expect_hash, force=force)
+        if stale is not None:
+            return stale
         p = plan["params"]
         roles = plan["roles"]
         columns = dict(plan["data"]["columns"])
@@ -3123,6 +4420,33 @@ def connect():
     return _connect_impl()
 
 
+def shutdown(timeout=5.0):
+    """优雅停机（#10）：排空任务队列并停掉专用 COM 线程。
+
+    只停引擎自身线程，不杀 Origin 进程（用户可能仍在手动使用 Origin）；
+    残留 Origin 进程的清理交给 DSH_ORIGIN_AUTOKILL 策略或用户手动 taskkill。
+    供插件宿主在卸载（ctx.effect）时显式调用；Python 进程退出时 COM 线程
+    为 daemon，会随进程自然回收。
+    """
+    global _com_thread
+    while True:
+        try:
+            pending = _com_queue.get_nowait()
+        except queue.Empty:
+            break
+        try:
+            pending[3].set_exception(RuntimeError("引擎停机：任务未执行"))
+        except Exception:
+            pass
+    _com_queue.put(None)
+    t, _com_thread = _com_thread, None
+    stopped = True
+    if t is not None and t.is_alive() and t is not threading.current_thread():
+        t.join(timeout=max(0.1, float(timeout)))
+        stopped = not t.is_alive()
+    return {"ok": True, "thread_stopped": stopped}
+
+
 @_synchronized
 def status():
     return _status_impl()
@@ -3296,6 +4620,19 @@ def error_codes():
     return _error_codes_impl()
 
 
+def diagnose(connect_probe=False):
+    """系统级自检（不走 COM 线程，连接失败时也可用）；connect_probe=True 才尝试真实连接。
+
+    注意：connect_probe 内部会经 engine.connect() 走专用 COM 线程。
+    """
+    return _diagnose_impl(connect_probe=connect_probe)
+
+
+def cookbook(scenario=""):
+    """场景速查（纯静态内容，离线秒回，不连 Origin）。"""
+    return _cookbook_impl(scenario=scenario)
+
+
 @_synchronized
 def load_file(path, worksheet=None, sheet=None, max_preview_rows=5):
     return _load_file_impl(path, worksheet=worksheet, sheet=sheet,
@@ -3309,10 +4646,12 @@ def save_project(path):
 
 @_synchronized
 def export_delivery(graph, source_path=None, output_dir=None, fmts="png,pdf",
-                    width=1200, save_opju=True):
+                    width=1200, save_opju=True, report_text=None,
+                    export_data_csv=True):
     return _export_delivery_impl(graph, source_path=source_path,
                                  output_dir=output_dir, fmts=fmts, width=width,
-                                 save_opju=save_opju)
+                                 save_opju=save_opju, report_text=report_text,
+                                 export_data_csv=export_data_csv)
 
 
 @_synchronized
@@ -3328,21 +4667,89 @@ def verify_graph(graph=None, expected_x_title=None, expected_y_title=None,
 
 
 @_synchronized
+def column_formula(worksheet, target, formula, lname=None):
+    return _column_formula_impl(worksheet, target, formula, lname=lname)
+
+
+@_synchronized
+def peak_fit(worksheet, x_column, y_column, n_peaks=1, kind="gauss",
+             centers_hint=None, baseline=True, plot_curve=True,
+             graph=None, title=None, show_components=True):
+    return _peak_fit_impl(worksheet, x_column, y_column, n_peaks=n_peaks,
+                          kind=kind, centers_hint=centers_hint,
+                          baseline=baseline, plot_curve=plot_curve,
+                          graph=graph, title=title,
+                          show_components=show_components)
+
+
+@_synchronized
+def mask_points(worksheet, y_column, rows=None, x_min=None, x_max=None,
+                x_column=None, backup=True):
+    return _mask_points_impl(worksheet, y_column, rows=rows, x_min=x_min,
+                             x_max=x_max, x_column=x_column, backup=backup)
+
+
+@_synchronized
+def add_line(graph, orientation="vertical", at=None, slope=None,
+             intercept=None, color="#D55E00", line_style=1, label=None,
+             layer=0):
+    return _add_line_impl(graph, orientation=orientation, at=at, slope=slope,
+                          intercept=intercept, color=color,
+                          line_style=line_style, label=label, layer=layer)
+
+
+@_synchronized
+def labtalk(script, read_expr=None, graph=None, read_kind="auto"):
+    return _labtalk_impl(script, read_expr=read_expr, graph=graph,
+                         read_kind=read_kind)
+
+
 def plot_template(template_id, data, graph_name=None, title=None,
                   style_mode="default", family=None, offset="auto",
                   reverse_x=False, fmt=None, file_path=None, width=1200,
                   x_title=None, y_title=None, gradient=False):
-    return _plot_template_impl(template_id, data, graph_name=graph_name,
-                               title=title, style_mode=style_mode, family=family,
-                               offset=offset, reverse_x=reverse_x, fmt=fmt,
-                               file_path=file_path, width=width,
-                               x_title=x_title, y_title=y_title, gradient=gradient)
+    """公共入口：模板绘制（COM 任务 1）+ 导出（COM 任务 2，独立投递）。
+
+    导出为何单独一个任务：见 _plot_template_impl 尾注（同任务内联导出会
+    令设色页的 DataPlots 枚举事后失效，verify_graph 误报 0 曲线）。
+    """
+    r = _plot_template_task(template_id, data, graph_name=graph_name,
+                            title=title, style_mode=style_mode, family=family,
+                            offset=offset, reverse_x=reverse_x,
+                            x_title=x_title, y_title=y_title,
+                            gradient=gradient)
+    if (fmt or file_path) and isinstance(r, dict) and r.get("ok") \
+            and r.get("graph"):
+        rex = _plot_template_export_task(r["graph"], file_path,
+                                         fmt or "png", width)
+        if rex.get("ok"):
+            r["file"] = rex["file"]
+            r["size"] = rex["size"]
+            r["format"] = rex["format"]
+        else:
+            r["warning"] = f"导出失败: {rex.get('error')}"
+    return r
 
 
 @_synchronized
-def execute_plan(plan_id, fmt=None, file_path=None, graph_name=None, width=1200):
+def _plot_template_task(template_id, data, graph_name=None, title=None,
+                        style_mode="default", family=None, offset="auto",
+                        reverse_x=False, x_title=None, y_title=None,
+                        gradient=False):
+    return _plot_template_impl(template_id, data, graph_name=graph_name,
+                               title=title, style_mode=style_mode,
+                               family=family, offset=offset,
+                               reverse_x=reverse_x,
+                               x_title=x_title, y_title=y_title,
+                               gradient=gradient)
+
+
+@_synchronized
+def execute_plan(plan_id, fmt=None, file_path=None, graph_name=None, width=1200,
+                 expect_hash=None, force=False):
     return _execute_plan_impl(plan_id, fmt=fmt, file_path=file_path,
-                              graph_name=graph_name, width=width)
+                              graph_name=graph_name, width=width,
+                              expect_hash=expect_hash, force=force)
 
 
 # ---------------------------------------------------------------------------

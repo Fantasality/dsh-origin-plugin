@@ -1,0 +1,463 @@
+{
+ "results": [
+  {
+   "case": "d01_raman",
+   "desc": "拉曼 D/G/2D 三峰拟合",
+   "ok": true,
+   "summary": "peaks=[1350.070665, 1580.069131, 2700.307289] R2=0.992598 graph=PeakFit20",
+   "problems": [],
+   "tool_calls": 3,
+   "tool_ok": 3,
+   "seconds": 2.3
+  },
+  {
+   "case": "d02_xps",
+   "desc": "XPS C1s 三组分+面积占比+反向轴",
+   "ok": true,
+   "summary": "面积比=[0.575, 0.274, 0.151] (真值≈[0.62,0.23,0.11]) R2=0.99957",
+   "problems": [],
+   "tool_calls": 4,
+   "tool_ok": 4,
+   "seconds": 2.9
+  },
+  {
+   "case": "d03_nmr",
+   "desc": "NMR dd 峰 Lorentz 裂分拟合",
+   "ok": true,
+   "summary": "4峰位=[7.5251, 7.5423, 7.5472, 7.5992] R2=0.983984",
+   "problems": [],
+   "tool_calls": 4,
+   "tool_ok": 4,
+   "seconds": 3.0
+  },
+  {
+   "case": "d04_combustion",
+   "desc": "燃烧热温升曲线+辅助线",
+   "ok": true,
+   "summary": "基线 slope=0.0007838442844284 Tmax=300.47K@240s (真值 ΔT≈2.5K)",
+   "problems": [],
+   "tool_calls": 8,
+   "tool_ok": 8,
+   "seconds": 24.1
+  },
+  {
+   "case": "d05_lsv_tafel",
+   "desc": "LSV Tafel：列公式 log+拟合+外推线",
+   "ok": true,
+   "summary": "b=118mV/dec (真值118) mask=25 col_formula=OK",
+   "problems": [],
+   "tool_calls": 9,
+   "tool_ok": 9,
+   "seconds": 25.8
+  },
+  {
+   "case": "d06_eis",
+   "desc": "EIS Nyquist 等轴比",
+   "ok": true,
+   "summary": "graph=Graph63 verify=True",
+   "problems": [],
+   "tool_calls": 2,
+   "tool_ok": 2,
+   "seconds": 2.7
+  },
+  {
+   "case": "d07_cv_multi",
+   "desc": "CV 5 圈渐变叠放",
+   "ok": true,
+   "summary": "graph=Graph64 legend=first_last verify=True",
+   "problems": [],
+   "tool_calls": 2,
+   "tool_ok": 2,
+   "seconds": 2.5
+  },
+  {
+   "case": "d08_gcd",
+   "desc": "充放电 3 圈叠放",
+   "ok": true,
+   "summary": "graph=Graph65",
+   "problems": [],
+   "tool_calls": 1,
+   "tool_ok": 1,
+   "seconds": 1.8
+  },
+  {
+   "case": "d09_ts_surface",
+   "desc": "过渡态马鞍面 3D+等高线",
+   "ok": true,
+   "summary": "surface=True(SurfPlot6) contour=True(Contour6)",
+   "problems": [],
+   "tool_calls": 2,
+   "tool_ok": 2,
+   "seconds": 2.6
+  },
+  {
+   "case": "d10_axis_ticks",
+   "desc": "轴量程与分度值",
+   "ok": true,
+   "summary": "graph=A6 verify=True",
+   "problems": [],
+   "tool_calls": 5,
+   "tool_ok": 5,
+   "seconds": 2.6
+  },
+  {
+   "case": "d11_mask_cosmic",
+   "desc": "cosmic ray 屏蔽",
+   "ok": true,
+   "summary": "peak_find 命中 1 尖峰，mask=3，备份=intensity_raw，NaN=3",
+   "problems": [],
+   "tool_calls": 6,
+   "tool_ok": 6,
+   "seconds": 2.4
+  },
+  {
+   "case": "d12_formula_kinetics",
+   "desc": "ln 走 Origin 列公式",
+   "ok": true,
+   "summary": "k=0.00419 (真值 0.0042) Origin 原生计算 sample_check=match",
+   "problems": [],
+   "tool_calls": 3,
+   "tool_ok": 3,
+   "seconds": 24.9
+  },
+  {
+   "case": "d13_threshold_line",
+   "desc": "直方图阈值辅助线",
+   "ok": true,
+   "summary": "graph=Histogram6 hist_color=自定义",
+   "problems": [],
+   "tool_calls": 4,
+   "tool_ok": 4,
+   "seconds": 2.9
+  },
+  {
+   "case": "d14_delivery",
+   "desc": "图表一体交付",
+   "ok": true,
+   "summary": "dir=D:\\workbuddyworkspace\\compare\\_chem_out\\d14_bundle csv=OK txt=OK files=2",
+   "problems": [],
+   "tool_calls": 3,
+   "tool_ok": 3,
+   "seconds": 5.1
+  },
+  {
+   "case": "d15_labtalk",
+   "desc": "任意 LabTalk 逃生舱",
+   "ok": true,
+   "summary": "nlayers=1.0 fsize_write_read=16.0",
+   "problems": [],
+   "tool_calls": 3,
+   "tool_ok": 3,
+   "seconds": 1.9
+  }
+ ],
+ "tool_log": [
+  {
+   "tool": "status",
+   "ok": true,
+   "ms": 773
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 575
+  },
+  {
+   "tool": "peak_fit(3)",
+   "ok": true,
+   "ms": 1581
+  },
+  {
+   "tool": "export",
+   "ok": true,
+   "ms": 177
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 584
+  },
+  {
+   "tool": "peak_fit(3)",
+   "ok": true,
+   "ms": 1612
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 502
+  },
+  {
+   "tool": "export",
+   "ok": true,
+   "ms": 183
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 621
+  },
+  {
+   "tool": "peak_fit(4)",
+   "ok": true,
+   "ms": 1986
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 189
+  },
+  {
+   "tool": "export",
+   "ok": true,
+   "ms": 188
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 623
+  },
+  {
+   "tool": "peak_find",
+   "ok": true,
+   "ms": 124
+  },
+  {
+   "tool": "mask_points",
+   "ok": true,
+   "ms": 145
+  },
+  {
+   "tool": "fit(前基线)",
+   "ok": true,
+   "ms": 20129
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 854
+  },
+  {
+   "tool": "add_line",
+   "ok": true,
+   "ms": 840
+  },
+  {
+   "tool": "add_line",
+   "ok": true,
+   "ms": 808
+  },
+  {
+   "tool": "export",
+   "ok": true,
+   "ms": 523
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 737
+  },
+  {
+   "tool": "column_formula",
+   "ok": true,
+   "ms": 135
+  },
+  {
+   "tool": "mask_points",
+   "ok": true,
+   "ms": 300
+  },
+  {
+   "tool": "fit(Tafel)",
+   "ok": true,
+   "ms": 22138
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 960
+  },
+  {
+   "tool": "add_line",
+   "ok": true,
+   "ms": 861
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 233
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 158
+  },
+  {
+   "tool": "export",
+   "ok": true,
+   "ms": 265
+  },
+  {
+   "tool": "plot_template(eis_nyquist)",
+   "ok": true,
+   "ms": 2462
+  },
+  {
+   "tool": "verify_graph",
+   "ok": true,
+   "ms": 247
+  },
+  {
+   "tool": "plot_template(cycle_overlay)",
+   "ok": true,
+   "ms": 2223
+  },
+  {
+   "tool": "verify_graph",
+   "ok": true,
+   "ms": 268
+  },
+  {
+   "tool": "plot_template(cycle_overlay)",
+   "ok": true,
+   "ms": 1802
+  },
+  {
+   "tool": "plot3d",
+   "ok": true,
+   "ms": 1274
+  },
+  {
+   "tool": "plot_contour",
+   "ok": true,
+   "ms": 1325
+  },
+  {
+   "tool": "plot_file",
+   "ok": true,
+   "ms": 1714
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 187
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 188
+  },
+  {
+   "tool": "verify_graph",
+   "ok": true,
+   "ms": 268
+  },
+  {
+   "tool": "export",
+   "ok": true,
+   "ms": 223
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 687
+  },
+  {
+   "tool": "peak_find",
+   "ok": true,
+   "ms": 177
+  },
+  {
+   "tool": "mask_points",
+   "ok": true,
+   "ms": 244
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 870
+  },
+  {
+   "tool": "read_worksheet",
+   "ok": true,
+   "ms": 167
+  },
+  {
+   "tool": "export",
+   "ok": true,
+   "ms": 226
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 701
+  },
+  {
+   "tool": "column_formula(ln)",
+   "ok": true,
+   "ms": 147
+  },
+  {
+   "tool": "fit",
+   "ok": true,
+   "ms": 24015
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 680
+  },
+  {
+   "tool": "histogram",
+   "ok": true,
+   "ms": 1195
+  },
+  {
+   "tool": "add_line",
+   "ok": true,
+   "ms": 782
+  },
+  {
+   "tool": "export",
+   "ok": true,
+   "ms": 272
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 708
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 940
+  },
+  {
+   "tool": "export_delivery",
+   "ok": true,
+   "ms": 3456
+  },
+  {
+   "tool": "plot_file",
+   "ok": true,
+   "ms": 1764
+  },
+  {
+   "tool": "labtalk(read)",
+   "ok": true,
+   "ms": 69
+  },
+  {
+   "tool": "labtalk(write+read)",
+   "ok": true,
+   "ms": 64
+  }
+ ],
+ "summary": {
+  "cases_ok": 15,
+  "cases_total": 15,
+  "tools_ok": 60,
+  "tools_total": 60,
+  "problems_total": 0
+ }
+}

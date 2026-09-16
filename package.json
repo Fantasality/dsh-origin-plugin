@@ -1,10 +1,13 @@
 {
   "name": "dsh-origin-plugin",
-  "version": "2.2.2",
-  "description": "Drive Origin scientific plotting from DeepSeek Harness AI chat via MCP - 43 tools: file import (CSV/TXT/XLSX, CJK-safe), plan-confirm flow, domain templates (stacked spectra/XRD/dual-Y/forest/multi-panel), fine-grained editing (per-curve color/width/symbol, axis, legend anchors, page geometry, window management), editable OPJU delivery, deterministic readback verification, inline image preview, statistics batch (t/ANOVA/PCA/survival), version capability handshake, stable error codes. Market-safe bundle: self-locating server path, fail-open startup, sync stdio transport.",
+  "version": "2.3.0",
+  "description": "Drive OriginLab Origin scientific plotting from any AI via MCP - 50 tools: file import (CSV/TXT/XLSX, CJK-safe), plan-confirm flow with plan_hash staleness guard, domain templates (stacked spectra/XRD/dual-Y/forest/multi-panel), fine-grained editing (per-curve color/width/symbol, axis, legend anchors, page geometry, window management), editable OPJU delivery, deterministic readback verification, inline image preview, statistics batch (t/ANOVA/PCA/survival) with confidence notes, system diagnostics, scenario cookbook, version capability handshake, stable error codes with recovery map. Works standalone via npx (official MCP SDK) and inside DeepSeek Harness (DSH bundle).",
   "license": "MIT",
   "type": "module",
   "main": "./index.js",
+  "bin": {
+    "dsh-origin-mcp": "./bin/dsh-origin-mcp.mjs"
+  },
   "exports": {
     ".": "./index.js"
   },
@@ -20,19 +23,24 @@
   },
   "files": [
     "index.js",
+    "bin/dsh-origin-mcp.mjs",
     "cordis.patch.yml",
     "README.md",
     "CHANGELOG.md",
+    "COMPATIBILITY.md",
     "LICENSE",
     "requirements.txt",
     "origin_engine.py",
     "origin_mcp_server.py",
+    "origin_mcp_stdio.py",
     "origin_errors.py",
-    "plot_style.py",
+    "origin_plan.py",
+    "origin_edit.py",
+    "origin_verify.py",
     "origin_analysis.py",
     "origin_fileio.py",
-    "origin_plan.py",
-    "origin_verify.py",
+    "plot_style.py",
+    "install.py",
     "demo_call.py",
     "run_origin_server.cmd",
     "skills",
@@ -47,9 +55,13 @@
     "mcp",
     "model-context-protocol",
     "origin",
+    "originlab",
     "originpro",
     "scientific-plotting",
     "data-visualization",
+    "kimi",
+    "cursor",
+    "claude",
     "cordis"
   ],
   "dsh": {

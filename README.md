@@ -1,21 +1,26 @@
-# DSH Origin Plugin · DeepSeek Harness × Origin 一键画图
+# DSH Origin Plugin · AI 对话驱动 OriginLab Origin 科学绘图
 
-让 **DeepSeek Harness (DSH)** 的 AI 对话直接驱动本机 **Origin**（科学绘图软件）自动画图并导出 **PNG / SVG**。
+**国内可用 · DSH 生态 · MCP 桥接通用** —— 让 AI 对话直接驱动本机 **OriginLab Origin** 自动画图、分析、交付。
+纯本机 COM 通道：**数据不出本机、无外网依赖、秒级响应**（对比需要外网的远程 Origin 服务（如 EditaPlot 类），国内访问不稳定且数据要上传第三方；本插件用你已装的正版 Origin，没有网络与隐私问题）。
 
 - 🤖 对话触发：`「用 Origin 画 y=x² 折线图并导出 PNG」` → 模型自动调用工具 → 图片落盘
-- 🔌 官方 MCP 桥接：通过 DSH 内置的 `@deepseek-ai/dsh-mcp-client` 注册为原生工具 `mcp__origin__*`
-- 🎨 **43 个工具**：2D 图 line/scatter/line_symbol/column/**histogram/box/bar** + 误差棒、3D、等高线、统计批
+- 🔌 **双形态接入**：DSH 内经官方 `@deepseek-ai/dsh-mcp-client` 桥接为原生工具；DSH 外经 **`origin_mcp_stdio.py`** 接入任何标准 MCP 客户端（Kimi Code / Cursor / Claude Desktop / WorkBuddy），或 `npx dsh-origin-plugin` 直接拉起
+- 🎨 **50 个工具**：2D 图 line/scatter/line_symbol/column/**histogram/box/bar** + 误差棒、3D、等高线、统计批
+- 📋 **计划确认流（防陈旧）**：`origin_plot_plan` 逐列画像+待确认问题+`plan_hash` → `origin_execute_plan`（数据/映射变了报 `plan_stale`，语义不明/发表级/多组对比强制走此流）
+- 🩺 **系统自检**：`origin_diagnose`——Origin 安装 / COM 注册 / 残留进程 / 导出目录权限，连不上先调它
+- 📖 **场景速查**：`origin_cookbook`——八场景调用链 + 高频工具推荐默认参数（离线秒回）
+- 🛡 **导出三级回退链**：save_fig → COM ImageExport → LabTalk expGraph，每级文件头校验（防静默失败假成功）
+- ⏱ **trace_id + 耗时**：每次调用自动附带，定位失败阶段不靠猜
 - 🎛 **细粒度改图**：`origin_edit_plot/axis/legend/page` —— 只换一条线的颜色、加粗、隐藏、挪图例、改轴范围、调纸张尺寸；`origin_manage_pages` 关窗/改名；`origin_inspect_graph` 先看清现状
 - 📂 **文件导入**：`origin_load_file` 直接读 CSV/TXT/XLSX/XLS（中文路径/编码安全）
 - 🧩 **领域模板**：多谱线堆叠偏移 / XRD 三件套 / 双Y轴 / 森林图 / 多面板（`origin_plot_template`）
-- 📋 **绘图计划确认流**：`origin_plot_plan` 逐列画像+待确认问题 → `origin_execute_plan` 执行（不确定列先问）
-- 📦 **可信交付**：`origin_export_delivery` 一键交付目录（图片+**可编辑 OPJU**）；`origin_save_project` 单独存工程
+- 📦 **可信交付**：`origin_export_delivery` 一键交付目录（图片+数据csv+**可编辑 OPJU**）；`origin_save_project` 单独存工程；`DSH_ORIGIN_NO_AUTO_SAVE=1` 可禁自动写 .opju（提示 Ctrl+S）
 - ✨ **期刊级排版**：`style_mode`(journal/presentation) + `family` 调色板（带使用约束）+ 幂等 `graph_name` + 语义轴标题 + `style_overrides` 显式样式逐项回报
-- 👁 **双保险校验**：`origin_view_graph` 内联图片（模型看）+ `origin_verify_graph` 确定性反读（程序核）
-- 🧮 **统计批**：t 检验 / ANOVA / PCA / Kaplan-Meier 生存分析（纯 numpy 自研）
-- 🛡 **稳定错误码**：全部调用返回 `error_code / recoverable / next_actions` 三件套，模型可安全分支
+- 👁 **双保险校验**：`origin_view_graph` 内联图片（模型看、也能带给用户）+ `origin_verify_graph` 确定性反读（程序核）
+- 🧮 **统计批**：t 检验 / ANOVA / PCA / Kaplan-Meier 生存分析（纯 numpy 自研，结果带 `confidence_note`：仅供探索，正式发表用 SPSS/R/Origin 复核）
+- 🛡 **稳定错误码 + 恢复映射**：`error_code / recoverable / next_actions / recovery(policy+diagnose)` 四件套
 - 🤝 **能力握手**：`origin_status` 返回 Origin 版本 + 已知坑矩阵（真机探针结论数据化）+ 特性表
-- 🔒 多会话并发安全：专用 COM 线程 + 单实例语义，实测 8 线程并发 8/8 通过；`ORIGIN_SESSION=isolated` 不劫持用户窗口
+- 🔒 多会话并发安全：专用 COM 线程 + 单实例语义，实测 8 线程并发 8/8 通过；`ORIGIN_SESSION=isolated` 不劫持用户窗口；`DSH_ORIGIN_AUTOKILL` 连接前自动清残留进程
 
 ![示例输出图](docs/example.png)  ![3D 表面示例](docs/example_3d.png)
 
@@ -47,22 +52,55 @@ Origin64.exe（单实例 COM 自动化服务器）
 > 见下方「skill 速查」），模型画图前加载 skill 或调用 `origin_help` 即可秒懂用法，
 > **无需阅读本 README**。
 
+### 两条使用路径（先选路，再动手）
+
+- **快速路径**：数据语义明确、临时查看 → `origin_plot_file` / `origin_load_file`+`origin_plot`，一次调用出图。
+- **正式路径**：发表级图 / 多组对比 / 列语义不明 → `origin_plot_plan` → 用户确认 questions → `origin_execute_plan`（带 `plan_hash` 防陈旧）→ `origin_verify_graph` → `origin_export_delivery`。
+- 想不起调用链 → `origin_cookbook`（八场景速查 + 推荐默认参数）；出问题 → `origin_diagnose` 先定位。
+
 ### 1. 环境要求
 
 - Windows + 已安装 [Origin](https://www.originlab.com/)（实测 OriginPro 2026b；2018+ 一般均可）
 - Python 3.10+（本插件自带独立 venv，不污染系统环境）
-- DeepSeek Harness（DSH Desktop 或 `dsh` CLI，需含 `@deepseek-ai/dsh-mcp-client`）
+- DSH 用户：DeepSeek Harness（DSH Desktop 或 `dsh` CLI，需含 `@deepseek-ai/dsh-mcp-client`）；
+  **非 DSH 用户**：任何支持 MCP stdio 的客户端即可（Kimi Code / Cursor / Claude Desktop / WorkBuddy 等）
 
 ### 2. 安装
+
+**方式 A —— 自动写入常见 AI 工具（v2.3.0 新增，推荐）**：
 
 ```bat
 git clone https://github.com/Fantasality/dsh-origin-plugin.git "%USERPROFILE%\dsh_origin_plugin"
 cd "%USERPROFILE%\dsh_origin_plugin"
-
-:: 创建独立 venv 并安装依赖
 python -m venv .venv
-.venv\Scripts\python.exe -m pip install mcp originpro pywin32 numpy
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 
+:: 检测已安装的 AI 工具（Claude Desktop/Cursor/Windsurf/Cline/VS Code/WorkBuddy/Kimi Code）
+python install.py --list
+:: 写入 mcpServers 配置（自动备份原文件）
+python install.py --yes
+```
+
+**方式 B —— npx 直接拉起（v2.3.0 新增）**：
+
+```sh
+npx -y dsh-origin-plugin --doctor       # 环境自检
+npx -y dsh-origin-plugin                # 启动 stdio MCP 服务器
+```
+
+**方式 C —— 手动配置**：把下面片段合并进你客户端的 mcpServers
+（或 `python origin_mcp_stdio.py --print-config` 打印各客户端的完整片段）：
+
+```json
+{"mcpServers": {"dsh-origin": {
+  "command": "<venv python 绝对路径>",
+  "args": ["<插件目录>/origin_mcp_stdio.py"]
+}}}
+```
+
+**方式 D —— DSH bundle 一键安装**（见下文 2.1/3）：
+
+```bat
 :: 冒烟验证 Origin COM 链路（需已安装 Origin；未运行会自动启动）
 .venv\Scripts\python.exe -X utf8 smoke\origin_com_smoke_test.py
 :: 预期结尾: RESULT: OK  files={'comtest.png': ..., 'comtest.svg': ...}
@@ -166,7 +204,7 @@ powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\dsh_origin_plugin\regist
 1. **`origin-plotting` skill（DSH 原生机制）**：安装时自动写入
    `%APPDATA%\dsh-desktop\harness\skills\origin-plotting\SKILL.md` 与
    `~/.dsh\skills\origin-plotting\SKILL.md`。模型目录可见该 skill，按需加载后
-   直接获得：数据格式、43 工具速查表、科学边界、12+ 个任务模板——**不用再读 README**；
+   直接获得：数据格式、50 工具速查表、科学边界、12+ 个任务模板——**不用再读 README**；
 2. **`mcp__origin__origin_help` 工具**：不连接 Origin、约 1ms 返回同一份速查
    （JSON 格式，含 usage/tools/templates/tips），任何时刻可调用。
 
@@ -177,6 +215,9 @@ powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\dsh_origin_plugin\regist
 | MCP 工具 | 作用 | 关键参数 |
 |---|---|---|
 | `origin_status` | 连接状态 / Origin 进程数 / 环境 | 无 |
+| `origin_help` | 快速使用速查（不连 Origin，秒回） | 无 |
+| `origin_diagnose` | **系统自检**：Origin 安装/COM 注册/残留进程/导出目录权限 | `connect_probe`? |
+| `origin_cookbook` | **场景速查**：八场景调用链 + 推荐默认参数 | `scenario`? |
 | `origin_write_data` | 多列数据写入工作表（dict 或二维列表） | `columns`, `worksheet`? |
 | `origin_plot` | 画图：line/scatter/line_symbol/column/**histogram/box/bar** + 误差棒 | `worksheet`, `plot_type`, `yerr_column`, `title` |
 | `origin_export` | 导出 PNG/SVG | `graph`, `fmt`, `file_path`, `width` |
@@ -217,6 +258,23 @@ powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\dsh_origin_plugin\regist
 | `origin_edit_page` | **改纸张 cm 尺寸 / 图层位置（%页）/ 背景** | `graph`, `page_size_cm` |
 | `origin_manage_pages` | **窗口管理**：关闭/激活/重命名/隐藏/复制 | `action`, `pages` |
 | `origin_add_text` | **加文本标注**（峰位/条件说明） | `graph`, `text`, `x`, `y` |
+| `origin_add_line` | **画辅助线**（vertical/horizontal/slope，Tafel 外推/阈值线） | `graph`, `kind` |
+| `origin_column_formula` | **Origin 原生列公式**（函数名自动纠正 + 硬失败检测） | `worksheet`, `target`, `formula` |
+| `origin_mask_points` | **屏蔽数据点**（NaN 化隐藏，可逆） | `worksheet`, `condition` |
+| `origin_peak_fit` | **多峰拟合**（Gauss/Lorentz 分峰） | `worksheet`, `x_column`, `y_column` |
+| `origin_labtalk` | 逃生舱：任意 LabTalk（带激活+读回+NaN 防护） | `script` |
+
+> 完整清单以 `origin_catalog` 为准（50 个工具，文档即实现永不脱节）。
+
+## 已知失败场景（实测汇总）
+
+完整的兼容性矩阵与 11 条实测失败场景（根因 + 处置）见 **[COMPATIBILITY.md](COMPATIBILITY.md)**。高频三条：
+
+| 场景 | 处置 |
+|---|---|
+| 残留 Origin64 僵尸进程导致 COM 连不上 | `taskkill /F /IM Origin64.exe` 等 2 秒重连；或设 `DSH_ORIGIN_AUTOKILL=1` 自动清理 |
+| LabTalk `log10()` 列公式静默无效 | LabTalk 底 10 对数是 `log()`；引擎 `origin_column_formula` 已自动纠正 |
+| 渐变设色 + 同一 COM 任务内导出丢曲线（v2.2 遗留） | v2.3.0 已修复（导出拆独立 COM 任务）；请升级 |
 
 ## 进阶能力
 
@@ -396,27 +454,34 @@ origin_manage_pages("close", pages=["Book3", "Book4"])              # 关掉多�
 ```
 dsh-origin-plugin/
 ├── origin_engine.py          # 核心引擎：连接/写数/画图/导出/线程/错误升级/模板/交付
-├── origin_errors.py          # 稳定错误码：枚举/恢复建议/遗留错误升级
+│                             #   （纯 Python，零 MCP/DSH SDK 依赖，可被任意宿主复用）
+├── origin_errors.py          # 稳定错误码：枚举/恢复建议/恢复动作映射(RECOVERY_MAP)/遗留升级
 ├── plot_style.py             # OKLab 调色板 + CVD 模拟 + 布局预设 + 使用约束
 ├── origin_analysis.py        # 纯 numpy 统计：t/ANOVA/PCA/似然 KM
 ├── origin_fileio.py          # 文件导入：CSV/TXT/XLSX/XLS（多编码/嗅探/表头识别）
-├── origin_plan.py            # 绘图计划：列画像/角色建议/待确认问题/plan_id 缓存
+├── origin_plan.py            # 绘图计划：列画像/角色建议/待确认问题/plan_hash/陈旧校验
 ├── origin_verify.py          # 确定性反读：跨层曲线数/轴/几何/图例/文件完整性
 ├── origin_edit.py            # 细粒度编辑：曲线/轴/图例/页面/窗口（逐项读回校验）
-├── origin_mcp_server.py      # MCP 服务器（43 工具注册式），自带自测模式
+├── origin_mcp_server.py      # MCP 服务器（50 工具注册式），自带自测模式
+├── origin_mcp_stdio.py       # 通用 stdio 入口（v2.3.0：Kimi/Cursor/Claude/WorkBuddy）
+├── install.py                # 自动检测 AI 工具并写入 mcpServers（自动备份）
+├── bin/dsh-origin-mcp.mjs    # npx 启动器（定位 Python + 依赖预检 + stdio 透传）
+├── index.js                  # DSH bundle 入口（ctx.effect 卸载清理）
 ├── demo_call.py              # 最小可运行示例（不依赖 MCP）
 ├── register_to_dsh.ps1       # 注册脚本（幂等/UTF-8 安全/自动备份）
 ├── unregister_from_dsh.ps1   # 卸载脚本
+├── COMPATIBILITY.md          # 兼容性矩阵 + 已知失败场景（实测）
 ├── skills/
-│   └── origin-plotting/SKILL.md  # DSH 原生 skill（模型速查 + 细粒度改图指引）
+│   ├── origin-plotting/SKILL.md  # 主 SOP：决策流 + 50 工具挂载 + 失败恢复
+│   └── origin-stats/SKILL.md     # 统计 SOP（v2.3.0 拆分）：11 统计工具 + 科学边界
 ├── smoke/
 │   ├── origin_com_smoke_test.py   # COM 链路冒烟测试
-│   ├── advanced_test.py           # 删点/拟合/3D
-│   ├── science_test.py            # 直方图/误差棒/等高线…
+│   ├── chemistry_cases.py         # 26 化学场景冒烟 v1
+│   ├── chemistry_cases_v2.py      # 15 物理化学场景冒烟 v2
 │   ├── fine_edit_test.py          # 细粒度编辑冒烟（25 项断言）
-│   ├── repro_defects.py           # 三条实测缺陷回归
-│   ├── labtalk_probe2..8.py       # 细粒度编辑能力真机探针（通道/单位矩阵）
-│   └── mcp_handshake_test.mjs     # 用 DSH 同款 Node SDK 验证 MCP 握手（43 工具）
+│   ├── repro_defects.py           # 实测缺陷回归
+│   ├── ltcol_probe.py             # LabTalk 列赋值语法穷举探针
+│   └── mcp_handshake_test.mjs     # Node MCP SDK 握手（50 工具）
 └── docs/
     ├── DESIGN.md              # 设计蓝图 + 真机探测矩阵 + 官方文档依据
     └── example*.png           # 真机示例图
@@ -460,10 +525,10 @@ node smoke\mcp_handshake_test.mjs
 - [ ] smoke 测试输出 `RESULT: OK`，`output\comtest.png` 存在
 - [ ] `--selftest` 输出 `SELFTEST OK`（含样式应用/幂等命名/预览/错误码/统计批）
 - [ ] `--concurrency-test` 输出 `CONCURRENCY-TEST OK`（8/8）
-- [ ] `--offline-test` 输出 `OFFLINE-TEST OK`（43 工具注册 + 计划流 + 文件 IO）
+- [ ] `--offline-test` 输出 `OFFLINE-TEST OK`（50 工具注册 + 计划流 + 文件 IO）
 - [ ] `--selftest` 输出 `SELFTEST OK`（含导入/计划流/模板/交付/反读/样式覆盖）
 - [ ] `--concurrency-test` 输出 `CONCURRENCY-TEST OK`（8/8）
-- [ ] `--mcp-test` 输出 `MCP-TEST OK`（43 工具可见，view_graph 返回 image 内容）
+- [ ] `--mcp-test` 输出 `MCP-TEST OK`（50 工具可见，view_graph 返回 image 内容）
 - [ ] `origin_view_graph` 的返回能被识图模型正确读出轴标题/图型/配色
 - [ ] `mcp_handshake_test.mjs` 输出 `HANDSHAKE-TEST OK`
 - [ ] `register_to_dsh.ps1` 执行成功，`dsh --profile web --dump-config` 可见 mcp-origin

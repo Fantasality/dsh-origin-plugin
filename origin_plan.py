@@ -14,9 +14,11 @@ origin_plan —— 绘图计划/确认流（纯离线，不连 Origin，可离�
 2. ``get_plan``（由 origin_execute_plan 使用）仅凭 plan_id 取回计划执行，
    模型无需回传大体积数据；服务器重启/缓存淘汰后返回 plan_not_found。
 
-设计取舍：刻意不做 EditaPlot 式的重型 hash 冻结机制 —— MCP 会话内模型有
-记忆，轻确认（plan + questions + 服务端缓存）已能覆盖"不确定列先问"的核心
-诉求，同时保持秒级响应。
+设计取舍：plan_id 本身就是内容哈希（数据+参数）；v2.3.0 起按用户要求补齐
+轻量防陈旧机制——计划显式返回 plan_hash（同 plan_id），并把列角色覆盖
+（x/y/yerr）纳入哈希；execute 前经 ``check_stale`` 校验：缓存完整性、
+调用方持有的 plan_hash 是否过期、是否存在更新的同签名计划（数据/映射
+变了报 plan_stale，force=True 可豁免）。
 
 科学边界（与 SKILL.md 约定一致，随计划返回）：
 不虚构/不补数据；不确定用途的列先询问；派生列必须标注 derived；
@@ -202,11 +204,14 @@ def build_plan(columns, plot_type="line", style_mode="default", family=None,
     }
     params = {"plot_type": plot_type, "style_mode": style_mode or "default",
               "family": family, "title": title, "fmt": fmt or "png",
-              "graph_name": graph_name, "file_path": file_path}
+              "graph_name": graph_name, "file_path": file_path,
+              "x_column": x_column, "y_columns": list(y_final),
+              "yerr_column": yerr_pick}
     plan_id = _plan_hash(clean, params)
     plan = {
         "ok": True,
         "plan_id": plan_id,
+        "plan_hash": plan_id,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "columns_meta": metas,
         "roles": {"x": suggested_x, "y": y_final, "yerr": yerr_pick,
@@ -231,6 +236,70 @@ def get_plan(plan_id):
     if p is not None:
         PLAN_CACHE.move_to_end(key)
     return p
+
+
+def _plan_signature(plan):
+    """识别"同一个逻辑图"的签名：同签名出现更新计划 => 旧计划视为陈旧。"""
+    p = plan.get("params", {})
+    r = plan.get("roles", {})
+    return (p.get("plot_type"), p.get("graph_name"), p.get("file_path"),
+            p.get("title"), r.get("x"), tuple(r.get("y") or []), r.get("yerr"))
+
+
+def _newer_same_signature(plan):
+    """缓存中是否存在同签名、更晚生成的计划（数据/映射变过 => 旧计划陈旧）。"""
+    sig = _plan_signature(plan)
+    keys = list(PLAN_CACHE.keys())
+    try:
+        idx = keys.index(plan["plan_id"])
+    except ValueError:
+        return None
+    for k in keys[idx + 1:]:
+        other = PLAN_CACHE.get(k)
+        if other is not None and _plan_signature(other) == sig:
+            return {"newer_plan_id": k, "newer_created_at": other.get("created_at")}
+    return None
+
+
+def check_stale(plan, expect_hash=None, force=False):
+    """execute 前的陈旧校验（#7）。
+
+    - 完整性：按缓存数据重算内容哈希，与 plan_id 不符 => plan_stale；
+    - expect_hash：调用方持有的 plan_hash 与该计划不符 => plan_stale；
+    - 更新计划：缓存中存在同签名、更晚生成的计划且未 force => plan_stale
+      （模型在重新 plan 之后仍执行旧 plan_id 的典型失误）。
+
+    通过返回 None；不通过返回 fail("plan_stale", ...) 结构。
+    """
+    try:
+        recomputed = _plan_hash(plan["data"]["columns"], plan["params"])
+    except Exception as e:
+        return oerr.fail("plan_stale", f"计划完整性校验异常: {e}")
+    if recomputed != plan.get("plan_id"):
+        return oerr.fail(
+            "plan_stale",
+            "计划内容校验失败：缓存数据与 plan_id 不一致（版本不兼容或缓存被污染）",
+            plan_id=plan.get("plan_id"),
+            next_actions=["重新调用 origin_plot_plan 生成新计划并执行新 plan_id"])
+    if expect_hash and str(expect_hash) != str(plan.get("plan_hash")):
+        return oerr.fail(
+            "plan_stale",
+            f"传入的 plan_hash {expect_hash} 与计划 {plan.get('plan_hash')} 不匹配："
+            "你持有的计划已过期（数据或列映射已变化）",
+            plan_id=plan.get("plan_id"), expected_hash=str(plan.get("plan_hash")),
+            next_actions=["重新 origin_plot_plan（数据/映射已变）",
+                          "确认新返回的 plan_hash 后再 origin_execute_plan"])
+    if not force:
+        newer = _newer_same_signature(plan)
+        if newer:
+            return oerr.fail(
+                "plan_stale",
+                "检测到同签名（同图型/标题/角色）的更新计划：数据或映射在生成该计划后"
+                "又重新 plan 过，执行旧计划会画过时数据",
+                plan_id=plan.get("plan_id"), newer_plan=newer,
+                next_actions=["改用 newer_plan_id 执行最新计划",
+                              "确认确实要执行旧计划时传 force=true 豁免"])
+    return None
 
 
 def cache_size():

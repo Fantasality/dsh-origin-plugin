@@ -1,5 +1,68 @@
 # Changelog
 
+## 2.3.0 (2026-09-16)
+
+**健壮性 + 解耦接入 + 文档体系大版本**（50 工具 / 27 错误码），另修复 1 项
+本轮引入的 multi_panel 回归。
+
+### 引擎健壮性
+- **autokill 连接前置清理**：连接 COM 前 taskkill 残留 Origin 进程并等待
+  （默认策略：`ORIGIN_SESSION=isolated` 时开、attach 模式默认关以保护用户
+  手动会话；`DSH_ORIGIN_AUTOKILL=1/0` 显式覆盖）；
+- **导出三级回退链**：`save_fig` → COM ImageExport → LabTalk `expGraph`，
+  每级以文件存在性 + 魔数（PNG/PDF 头）裁决，返回 `attempts` 归因明细
+  （LabTalk 静默失败特性下，文件校验是最终裁决）；
+- **禁自动保存**：`origin_save_project` 默认拒绝（`DSH_ORIGIN_NO_AUTO_SAVE=0`
+  可开），返回 `manual_save_required` 错误码并提示用户 Ctrl+S；
+  `export_delivery` 遇此码优雅降级（其余产物照常交付）；
+- **错误码 → 恢复动作映射**：`RECOVERY_MAP` 全表 27 码，五类 policy
+  （fix_args_then_retry / retry_same_args / restart_origin_then_retry /
+  replan_then_retry / no_retry），每个失败返回自动内嵌 `recovery` 字段，
+  `origin_error_codes` 可单独查询。
+
+### 新能力（工具 43 → 50）
+- `origin_diagnose`：7 检查项（安装/进程/autokill/COM 注册/引擎连接/
+  环境策略/导出目录）+ 建议，失败排障第一入口；
+- `origin_cookbook`：8 类常见场景（浓度/动力学/滴定/光谱/电化学/XRD/
+  相图/发表级）配方 + 默认参数 + 路径约定，前缀匹配；
+- **trace_id + duration_ms**：每个工具调用返回可追溯 ID 与耗时；
+- **推荐默认参数**：origin_cookbook 内置 9 项语义规范默认值；
+- 新模板 `cycle_overlay`（多圈叠放渐变色 + legend_mode）与
+  `eis_nyquist`（等轴比 Nyquist）；
+- 6 个自研统计工具返回附加 `confidence_note`（明确 "这是引擎自算" 边界）。
+
+### 计划与统计
+- `origin_plot_plan` 计划哈希纳入列角色（x_column/y_columns/yerr_pick）；
+  `origin_execute_plan` 新增 `expect_hash` 与 `force`，数据变更后执行
+  返回 `plan_stale` + replan 策略（三重校验：完整性/expect_hash/
+  同签名更新计划）。
+
+### 解耦与接入（脱离 DSH 也能跑）
+- `origin_engine.py` 零 MCP/DSH SDK 依赖（纯 originpro + 标准库）；
+- 新增 `origin_mcp_stdio.py` 独立 stdio 入口（`--print-config` 输出
+  7 客户端配置片段、`--doctor` 一键体检）；
+- 新增 `install.py`：一键注册/卸载到 Claude Desktop / Cursor / VSCode /
+  Cline / Continue / DSH / Kimi Code（自动检测、备份、合并写）；
+- `package.json` 提供真实 `bin`（`npx dsh-origin-mcp`），自动挑 Python
+  并预检依赖；打包 files 修正遗漏的 origin_edit.py；
+- DSH 插件 `index.js` 卸载清理走 `ctx.effect` + engine 优雅停机
+  （排空队列 + 毒丸 + join，COM 线程死后自愈重启）。
+
+### 文档体系
+- 主 SKILL（origin-plotting）v2.3.0：宿主注入规范节、快速/正式双路径、
+  强制确认流三情形 + plan_hash、错误表扩至 16 行、环境变量附录；
+- 新增 `skills/origin-stats`：11 个统计工具速查 + 科学边界铁律（从主
+  SKILL 拆出，主流程不再被统计细节稀释）；
+- 新增 `COMPATIBILITY.md`：接入方式矩阵、兼容性、**11 条实测失败场景**
+  （渐变+同任务导出毒化、log10 无效点、missing 值哨兵等）；
+- README 首屏重定位（国内可用 · DSH 生态 · MCP 桥接），安装方式 A–D。
+
+### 修复
+- **multi_panel 校验孤儿代码**：`_validate_template_data` 中 forest 分支
+  尾部残留错挂在 multi_panel 分支下，任何 multi_panel 调用必触发
+  `UnboundLocalError`（selftest best-effort=False 与 c23 案例根因，
+  冒烟中发现并修复，selftest 复测 True）。
+
 ## 2.2.2 (2026-09-16)
 
 **26 个化学场景实测（大学基础 → Nature 级）暴露的 20 项缺点全量修复**，
