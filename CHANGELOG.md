@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.6.1 (2026-09-16)
+
+**npm 包修复版**：2.6.0 的 `files` 白名单遗漏 v2.5.0/v2.6.0 新增模块
+（origin_bridge/origin_gallery/origin_spec/origin_matrix——stdio 模式调用
+矩阵/spec/桥接/PPT/Gallery 工具会 ImportError）。2.6.1 补全白名单并新增
+tests/、pyproject.toml、README.en.md 入包（npm pack 清单已逐项复核）。
+代码与 2.6.0 完全一致，仅打包范围修复；**请直接安装 2.6.1**。
+
 ## 2.6.0 (2026-09-16)
 
 **P2 生态批次**（ROADMAP #P2 八项全落地；62 工具 / 30 错误码）。

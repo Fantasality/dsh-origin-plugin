@@ -1,6 +1,6 @@
 {
   "name": "dsh-origin-plugin",
-  "version": "2.6.0",
+  "version": "2.6.1",
   "description": "Drive OriginLab Origin scientific plotting from any AI via MCP - 50 tools: file import (CSV/TXT/XLSX, CJK-safe), plan-confirm flow with plan_hash staleness guard, domain templates (stacked spectra/XRD/dual-Y/forest/multi-panel), fine-grained editing (per-curve color/width/symbol, axis, legend anchors, page geometry, window management), editable OPJU delivery, deterministic readback verification, inline image preview, statistics batch (t/ANOVA/PCA/survival) with confidence notes, system diagnostics, scenario cookbook, version capability handshake, stable error codes with recovery map. Works standalone via npx (official MCP SDK) and inside DeepSeek Harness (DSH bundle).",
   "license": "MIT",
   "type": "module",
@@ -38,6 +38,10 @@
     "origin_edit.py",
     "origin_verify.py",
     "origin_analysis.py",
+    "origin_bridge.py",
+    "origin_gallery.py",
+    "origin_spec.py",
+    "origin_matrix.py",
     "origin_fileio.py",
     "plot_style.py",
     "install.py",
@@ -45,7 +49,10 @@
     "run_origin_server.cmd",
     "skills",
     "docs",
-    "smoke"
+    "smoke",
+    "tests",
+    "pyproject.toml",
+    "README.en.md"
   ],
   "keywords": [
     "dsh",
