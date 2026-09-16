@@ -162,6 +162,18 @@ CODE_META: Dict[str, tuple] = {
         ["请在 Origin 窗口按 Ctrl+S 手动保存当前项目",
          "如需恢复脚本自动保存，取消环境变量 DSH_ORIGIN_NO_AUTO_SAVE 后重试"],
     ),
+    # --- v2.4.0 看门狗与 LabTalk 门禁 ---
+    "com_blocked_by_dialog": (
+        True,
+        ["Origin 被模态对话框阻塞且看门狗未能解除（错误信息含对话框标题）",
+         "在 Origin 窗口手动关闭对话框后原样重试；若 Origin 已无响应，"
+         "taskkill /F /IM Origin64.exe 后重连（isolated 会话下次连接自动清理）"],
+    ),
+    "labtalk_blocked": (
+        False,
+        ["脚本包含破坏性命令（delete / doc -s / exit 等），默认拦截",
+         "确认无误后带 confirm=true 重发；或改用等价的非破坏命令"],
+    ),
 }
 
 VALID_CODES = frozenset(CODE_META)
@@ -298,6 +310,16 @@ RECOVERY_MAP: Dict[str, Dict[str, Any]] = {
         "policy": RECOVERY_POLICY_NO,
         "diagnose": ["在 Origin 窗口按 Ctrl+S 手动保存",
                      "或设置 DSH_ORIGIN_NO_AUTO_SAVE=0 恢复自动保存"],
+    },
+    "com_blocked_by_dialog": {
+        "policy": RECOVERY_POLICY_RETRY,
+        "diagnose": ["在 Origin 窗口关闭阻塞对话框（标题见 error 字段）",
+                     "origin_status 复核连接；必要时 taskkill /F /IM Origin64.exe"],
+    },
+    "labtalk_blocked": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["检查脚本是否确需破坏性命令",
+                     "确认后带 confirm=true 重发 origin_labtalk"],
     },
 }
 

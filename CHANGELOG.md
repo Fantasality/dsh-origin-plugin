@@ -1,5 +1,39 @@
 # Changelog
 
+## 2.4.0 (2026-09-16)
+
+**P0 稳健性批次**（ROADMAP #P0 五项；54 工具 / 29 错误码）。
+
+### 看门狗与连接管理
+- **模态对话框看门狗**（来源 youngminsw）：COM 调用软超时（默认 90s，
+  `DSH_ORIGIN_DISPATCH_TIMEOUT`）后自动枚举 Origin 的模态对话框并点击
+  白名单按钮（OK/确定/取消类，EnumWindows+BM_CLICK）；解除则正常返回并附
+  `watchdog_dismissed`；仍未解除按 autokill 策略处置，返回
+  `com_blocked_by_dialog`（含对话框标题）。`DSH_ORIGIN_WATCHDOG_GRACE`
+  控制点击后等待（默认 15s）。
+- **origin_release / origin_reconnect**（来源 garethbeaumo）：释放自动化连接
+  但保持 Origin 打开（用户可立即手动操作）；下次任意工具调用自动重连。
+  实测约束：release 不停 COM 线程（线程绑定 CoInitialize 状态，停线程
+  重连会原生崩溃）。
+
+### 安全与拟合
+- **LabTalk 破坏命令门禁**（来源 youngminsw）：`delete / exit / quit / kill /
+  purge / doc -s / win -c` 默认拦截（`labtalk_blocked`），tokenizer 分词、
+  字符串字面量豁免；`confirm=true` 显式放行。
+- **origin_fit 收敛控制**（来源 garethbeaumo；探针实证 originpro API）：
+  `initial_params`（NLFit set_param）、`fixed_params`（NLFit fix_param /
+  linear fix_slope·fix_intercept）、`weight_col`（NLFit set_data yerr 通道；
+  linear 加权明确拒绝）。固定参数误差（e_*=0）显式回传作"确实没动"证据。
+
+### 细粒度操作
+- **origin_manage_plots**：remove 删曲线（`gl.remove_plot`，探针实证）/
+  change_data 换数据源（`pl.change_data(wks, x=, y=)`）。
+- **origin_manage_data**：sort 按列排序整表（`wks.sort(col, dec)`）/
+  transpose 行列转置（Python 侧转置写新表；>1000 行保护性拒绝）。
+
+### 修复
+- fine_edit 测试的 list_pages 断言解除环境耦合（closeAll 清场后 0 页属正常）。
+
 ## 2.3.0 (2026-09-16)
 
 **健壮性 + 解耦接入 + 文档体系大版本**（50 工具 / 27 错误码），另修复 1 项

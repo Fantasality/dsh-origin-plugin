@@ -4,11 +4,11 @@
    "case": "d01_raman",
    "desc": "拉曼 D/G/2D 三峰拟合",
    "ok": true,
-   "summary": "peaks=[1350.070665, 1580.069131, 2700.307289] R2=0.992598 graph=PeakFit23",
+   "summary": "peaks=[1350.070665, 1580.069131, 2700.307289] R2=0.992598 graph=PeakFit",
    "problems": [],
    "tool_calls": 3,
    "tool_ok": 3,
-   "seconds": 2.7
+   "seconds": 1.6
   },
   {
    "case": "d02_xps",
@@ -18,7 +18,7 @@
    "problems": [],
    "tool_calls": 4,
    "tool_ok": 4,
-   "seconds": 3.4
+   "seconds": 1.7
   },
   {
    "case": "d03_nmr",
@@ -28,7 +28,7 @@
    "problems": [],
    "tool_calls": 4,
    "tool_ok": 4,
-   "seconds": 3.2
+   "seconds": 2.1
   },
   {
    "case": "d04_combustion",
@@ -38,7 +38,7 @@
    "problems": [],
    "tool_calls": 8,
    "tool_ok": 8,
-   "seconds": 29.5
+   "seconds": 4.3
   },
   {
    "case": "d05_lsv_tafel",
@@ -48,57 +48,57 @@
    "problems": [],
    "tool_calls": 9,
    "tool_ok": 9,
-   "seconds": 30.6
+   "seconds": 4.2
   },
   {
    "case": "d06_eis",
    "desc": "EIS Nyquist 等轴比",
    "ok": true,
-   "summary": "graph=Graph124 verify=True",
+   "summary": "graph=Graph3 verify=True",
    "problems": [],
    "tool_calls": 2,
    "tool_ok": 2,
-   "seconds": 2.5
+   "seconds": 1.3
   },
   {
    "case": "d07_cv_multi",
    "desc": "CV 5 圈渐变叠放",
    "ok": true,
-   "summary": "graph=Graph125 legend=first_last verify=True",
+   "summary": "graph=Graph4 legend=first_last verify=True",
    "problems": [],
    "tool_calls": 2,
    "tool_ok": 2,
-   "seconds": 2.7
+   "seconds": 1.6
   },
   {
    "case": "d08_gcd",
    "desc": "充放电 3 圈叠放",
    "ok": true,
-   "summary": "graph=Graph126",
+   "summary": "graph=Graph5",
    "problems": [],
    "tool_calls": 1,
    "tool_ok": 1,
-   "seconds": 2.1
+   "seconds": 1.1
   },
   {
    "case": "d09_ts_surface",
    "desc": "过渡态马鞍面 3D+等高线",
    "ok": true,
-   "summary": "surface=True(SurfPlot9) contour=True(Contour7)",
+   "summary": "surface=True(SurfPlot) contour=True(Contour)",
    "problems": [],
    "tool_calls": 2,
    "tool_ok": 2,
-   "seconds": 2.5
+   "seconds": 1.2
   },
   {
    "case": "d10_axis_ticks",
    "desc": "轴量程与分度值",
    "ok": true,
-   "summary": "graph=A9 verify=True",
+   "summary": "graph=A verify=True",
    "problems": [],
    "tool_calls": 5,
    "tool_ok": 5,
-   "seconds": 2.3
+   "seconds": 1.6
   },
   {
    "case": "d11_mask_cosmic",
@@ -108,7 +108,7 @@
    "problems": [],
    "tool_calls": 6,
    "tool_ok": 6,
-   "seconds": 2.3
+   "seconds": 1.3
   },
   {
    "case": "d12_formula_kinetics",
@@ -118,17 +118,17 @@
    "problems": [],
    "tool_calls": 3,
    "tool_ok": 3,
-   "seconds": 29.1
+   "seconds": 3.3
   },
   {
    "case": "d13_threshold_line",
    "desc": "直方图阈值辅助线",
    "ok": true,
-   "summary": "graph=Histogram9 hist_color=自定义",
+   "summary": "graph=Histogram hist_color=自定义",
    "problems": [],
    "tool_calls": 4,
    "tool_ok": 4,
-   "seconds": 3.2
+   "seconds": 2.1
   },
   {
    "case": "d14_delivery",
@@ -138,7 +138,7 @@
    "problems": [],
    "tool_calls": 3,
    "tool_ok": 3,
-   "seconds": 3.7
+   "seconds": 1.7
   },
   {
    "case": "d15_labtalk",
@@ -148,309 +148,309 @@
    "problems": [],
    "tool_calls": 3,
    "tool_ok": 3,
-   "seconds": 1.7
+   "seconds": 1.0
   }
  ],
  "tool_log": [
   {
    "tool": "status",
    "ok": true,
-   "ms": 666
+   "ms": 653
   },
   {
    "tool": "write_data",
    "ok": true,
-   "ms": 673
+   "ms": 388
   },
   {
    "tool": "peak_fit(3)",
    "ok": true,
-   "ms": 1877
+   "ms": 1017
   },
   {
    "tool": "export",
    "ok": true,
-   "ms": 180
+   "ms": 157
   },
   {
    "tool": "write_data",
    "ok": true,
-   "ms": 746
+   "ms": 395
   },
   {
    "tool": "peak_fit(3)",
    "ok": true,
-   "ms": 1982
+   "ms": 1009
   },
   {
    "tool": "edit_axis",
    "ok": true,
-   "ms": 446
+   "ms": 161
   },
   {
    "tool": "export",
-   "ok": true,
-   "ms": 183
-  },
-  {
-   "tool": "write_data",
-   "ok": true,
-   "ms": 781
-  },
-  {
-   "tool": "peak_fit(4)",
-   "ok": true,
-   "ms": 2081
-  },
-  {
-   "tool": "edit_axis",
    "ok": true,
    "ms": 155
   },
   {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 403
+  },
+  {
+   "tool": "peak_fit(4)",
+   "ok": true,
+   "ms": 1356
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 136
+  },
+  {
    "tool": "export",
    "ok": true,
-   "ms": 175
+   "ms": 155
   },
   {
    "tool": "write_data",
    "ok": true,
-   "ms": 722
+   "ms": 411
   },
   {
    "tool": "peak_find",
    "ok": true,
-   "ms": 118
+   "ms": 105
   },
   {
    "tool": "mask_points",
    "ok": true,
-   "ms": 139
+   "ms": 123
   },
   {
    "tool": "fit(前基线)",
    "ok": true,
-   "ms": 25713
+   "ms": 2198
   },
   {
    "tool": "plot",
    "ok": true,
-   "ms": 820
+   "ms": 295
   },
   {
    "tool": "add_line",
    "ok": true,
-   "ms": 880
+   "ms": 503
   },
   {
    "tool": "add_line",
    "ok": true,
-   "ms": 876
+   "ms": 500
   },
   {
    "tool": "export",
    "ok": true,
-   "ms": 190
+   "ms": 153
   },
   {
    "tool": "write_data",
    "ok": true,
-   "ms": 752
+   "ms": 414
   },
   {
    "tool": "column_formula",
    "ok": true,
-   "ms": 147
+   "ms": 114
   },
   {
    "tool": "mask_points",
    "ok": true,
-   "ms": 228
+   "ms": 191
   },
   {
    "tool": "fit(Tafel)",
    "ok": true,
-   "ms": 27125
+   "ms": 2243
   },
   {
    "tool": "plot",
    "ok": true,
-   "ms": 850
+   "ms": 302
   },
   {
    "tool": "add_line",
    "ok": true,
-   "ms": 946
+   "ms": 515
   },
   {
    "tool": "edit_axis",
    "ok": true,
-   "ms": 196
+   "ms": 158
   },
   {
    "tool": "edit_axis",
    "ok": true,
-   "ms": 174
+   "ms": 138
   },
   {
    "tool": "export",
    "ok": true,
-   "ms": 183
+   "ms": 150
   },
   {
    "tool": "plot_template(eis_nyquist)",
    "ok": true,
-   "ms": 1931
+   "ms": 1033
   },
   {
    "tool": "verify_graph",
    "ok": true,
-   "ms": 551
+   "ms": 233
   },
   {
    "tool": "plot_template(cycle_overlay)",
    "ok": true,
-   "ms": 2415
+   "ms": 1350
   },
   {
    "tool": "verify_graph",
    "ok": true,
-   "ms": 267
+   "ms": 218
   },
   {
    "tool": "plot_template(cycle_overlay)",
    "ok": true,
-   "ms": 2143
+   "ms": 1139
   },
   {
    "tool": "plot3d",
    "ok": true,
-   "ms": 1298
+   "ms": 668
   },
   {
    "tool": "plot_contour",
    "ok": true,
-   "ms": 1152
+   "ms": 557
   },
   {
    "tool": "plot_file",
    "ok": true,
-   "ms": 1546
+   "ms": 897
   },
   {
    "tool": "edit_axis",
    "ok": true,
-   "ms": 170
+   "ms": 164
   },
   {
    "tool": "edit_axis",
    "ok": true,
-   "ms": 173
+   "ms": 156
   },
   {
    "tool": "verify_graph",
    "ok": true,
-   "ms": 219
+   "ms": 189
   },
   {
    "tool": "export",
    "ok": true,
-   "ms": 177
+   "ms": 152
   },
   {
    "tool": "write_data",
    "ok": true,
-   "ms": 821
+   "ms": 444
   },
   {
    "tool": "peak_find",
    "ok": true,
-   "ms": 132
+   "ms": 108
   },
   {
    "tool": "mask_points",
    "ok": true,
-   "ms": 200
+   "ms": 176
   },
   {
    "tool": "plot",
    "ok": true,
-   "ms": 843
+   "ms": 319
   },
   {
    "tool": "read_worksheet",
    "ok": true,
-   "ms": 94
+   "ms": 79
   },
   {
    "tool": "export",
    "ok": true,
-   "ms": 183
+   "ms": 157
   },
   {
    "tool": "write_data",
    "ok": true,
-   "ms": 819
+   "ms": 440
   },
   {
    "tool": "column_formula(ln)",
    "ok": true,
-   "ms": 147
+   "ms": 118
   },
   {
    "tool": "fit",
    "ok": true,
-   "ms": 28156
+   "ms": 2781
   },
   {
    "tool": "write_data",
    "ok": true,
-   "ms": 779
+   "ms": 436
   },
   {
    "tool": "histogram",
    "ok": true,
-   "ms": 1365
+   "ms": 935
   },
   {
    "tool": "add_line",
    "ok": true,
-   "ms": 899
+   "ms": 567
   },
   {
    "tool": "export",
    "ok": true,
-   "ms": 179
+   "ms": 154
   },
   {
    "tool": "write_data",
    "ok": true,
-   "ms": 829
+   "ms": 455
   },
   {
    "tool": "plot",
    "ok": true,
-   "ms": 940
+   "ms": 349
   },
   {
    "tool": "export_delivery",
    "ok": true,
-   "ms": 1929
+   "ms": 900
   },
   {
    "tool": "plot_file",
    "ok": true,
-   "ms": 1573
+   "ms": 892
   },
   {
    "tool": "labtalk(read)",
    "ok": true,
-   "ms": 62
+   "ms": 48
   },
   {
    "tool": "labtalk(write+read)",
    "ok": true,
-   "ms": 57
+   "ms": 50
   }
  ],
  "summary": {

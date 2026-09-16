@@ -53,8 +53,9 @@ def main():
     # ---------- 1. list_pages ----------
     lp = engine.list_pages()
     check(lp.get("ok"), "list_pages 返回 ok", lp)
-    check(isinstance(lp.get("pages"), list) and lp.get("count", 0) > 0,
-          f"list_pages 枚举到 {lp.get('count')} 个页面", lp)
+    # 只验证返回结构（count 依赖环境：closeAll 清场后 0 页是正常状态）
+    check(isinstance(lp.get("pages"), list) and isinstance(lp.get("count"), int),
+          f"list_pages 返回结构正确（count={lp.get('count')}）", lp)
     print("   graphs:", (lp.get("graphs") or [])[:6],
           "| workbooks:", len(lp.get("workbooks") or []))
 

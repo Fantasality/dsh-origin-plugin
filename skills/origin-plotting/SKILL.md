@@ -111,6 +111,8 @@ whenToUse: 用户要求用 Origin 画图、导入数据、拟合/FFT/统计分�
 | 投稿单栏页 8.9cm | `origin_edit_page(graph, page_size_cm={"width":8.9,"height":6.5})` |
 | 调图层位置大小（%页） | `origin_edit_page(graph, layer=0, layer_geometry_pct={"left":14,"top":8,"width":80,"height":60})` |
 | 关掉多余窗口 | `origin_manage_pages("close", pages=["Book3","Book4"])`（短名来自 `origin_list_pages`） |
+| 删除图内某条曲线 | `origin_manage_plots(graph, "remove", plot_index=2)`（索引从 0 起；区别于 visible:false 隐藏） |
+| 曲线换数据源（不改样式） | `origin_manage_plots(graph, "change_data", plot_index=0, data_worksheet="[B2]Sheet1", x_col="x2", y_col="y2")` |
 | 加峰位/条件标注 | `origin_add_text(graph, "peak @ 30 C", x=30, y=118)` |
 | 画辅助线（Tafel 外推/阈值） | `origin_add_line(graph, kind="vertical", x=..)` |
 | 整图换排版/调色板 | `origin_apply_style(graph, style_mode="journal", family="...")` |
@@ -157,6 +159,8 @@ whenToUse: 用户要求用 Origin 画图、导入数据、拟合/FFT/统计分�
 | `template_unavailable` | 模板名在本机版本不存在 | `origin_status` 查可用模板（双 Y 实测可用 `doubley`/`righty`） |
 | `worksheet_not_found` / `column_not_found` | 引用错 | `origin_list_sheets` + `origin_read_worksheet` 重建引用 |
 | `origin_busy_user_session` | 用户在手动操作 | 等 5s 重试 ≤3 次 → 告知用户 |
+| `labtalk_blocked` | LabTalk 含破坏命令（delete/doc -s/exit/win -c）被门禁拦截 | 确认确需执行 → 带 `confirm=true` 重发；否则换非破坏命令 |
+| `com_blocked_by_dialog` | Origin 被模态对话框卡住且看门狗未能自动解除（error 含对话框标题） | 在 Origin 窗口手动关闭该对话框 → 原样重试；无响应时 taskkill |
 | 读回值是 `NaN` | LabTalk 静默失败（通道在当前图/版本无效） | **不要重试同一通道**；换 `origin_edit_*` 的 COM 通道，或 `origin_view_graph` 目视确认 |
 | `layer_overlap:*` 检查 fail/warn | 图层 bbox 重叠（部分重叠=fail；完全重叠=warn） | 多面板布局损坏 → 重建；双 Y 类共享绘图区属正常 → verify 传 `allow_full_overlap=true` |
 
@@ -194,6 +198,8 @@ whenToUse: 用户要求用 Origin 画图、导入数据、拟合/FFT/统计分�
   MichaelisMenten / Logistic / Poly2`（返回值带 `supported_kinds` 清单）。
   默认自动关闭 NLFit 的 FitLine*/Residual* 报告副产品页（`removed_report_pages`
   记录清单），不会再爆窗口；空列/点数不足会以 `no_data_to_fit`/`insufficient_data` 明确拒绝。
+  收敛控制：`initial_params={"A":1.5}` 初值、`fixed_params={"A":true}` 固定参数
+  （linear 用 `{"slope":0}` 固定斜率）、`weight_col="误差列"` 加权（仅 NLFit）。
 - **积分** `origin_integrate(..., baseline=...)`：baseline 可传 `"min"`/`"first"`
   或数值——DSC 焓变等需要扣基线的场景用。
 - **描述统计/检验/降维/生存**（`origin_stats` / `origin_ttest` / `origin_anova` /
@@ -202,9 +208,13 @@ whenToUse: 用户要求用 Origin 画图、导入数据、拟合/FFT/统计分�
   `origin_histogram`）：用法与科学边界见 **origin-stats skill**；
   这些结果均带 `confidence_note`（自研统计仅探索用，正式发表用 SPSS/R/Origin 复核）。
 - **数据加工**：`origin_column_formula`（Origin 原生列公式；函数名自动纠正，
-  无效公式硬失败 `formula_no_effect`）、`origin_mask_points`（NaN 化屏蔽，可逆）。
+  无效公式硬失败 `formula_no_effect`）、`origin_mask_points`（NaN 化屏蔽，可逆）、
+  `origin_manage_data`（sort 按列排序整表 / transpose 行列转置写新表）。
 - **窗口清理**：`origin_manage_pages("closeAll")` 一键关闭项目内全部页面
   （会话结束恢复干净状态用；返回 removed 清单）。
+- **交付后让机**：用户要手动微调时 `origin_release()`（Origin 保持打开、
+  自动化断开，用户操作不被干扰）；后续任意工具调用自动重连，
+  `origin_reconnect()` 可显式恢复。
 
 ## 附录 C 通道纪律与环境变量（排障时读）
 **通道纪律**（这是"必须用 edit 工具、别绕 LabTalk"的原因）：
@@ -222,8 +232,10 @@ whenToUse: 用户要求用 Origin 画图、导入数据、拟合/FFT/统计分�
 | `DSH_ORIGIN_NO_AUTO_SAVE` | 未设（允许自动保存） | `1`=禁止脚本自动写 .opju，返回 `manual_save_required` 提示用户 Ctrl+S |
 | `ORIGIN_MCP_PROFILE` | full | `compact`=隐藏统计批（ttest/anova/pca/survival） |
 | `ORIGIN_IPC_LOCK` | 关 | `1`=跨进程命名互斥体（多 DSH 实例共用一个 Origin 时防踩踏） |
+| `DSH_ORIGIN_DISPATCH_TIMEOUT` | 90 | COM 调用软超时秒数；超时后看门狗自动点掉 Origin 模态对话框（OK/取消类），仍卡死则按 `DSH_ORIGIN_AUTOKILL` 策略处置并返回 `com_blocked_by_dialog` |
+| `DSH_ORIGIN_WATCHDOG_GRACE` | 15 | 看门狗点击对话框后的额外等待秒数 |
 
-- 逃生舱：`origin_labtalk`（任意 LabTalk 执行，带激活+读回+NaN 防护）——只在 edit 工具覆盖不到的场景用。
+- 逃生舱：`origin_labtalk`（任意 LabTalk 执行，带激活+读回+NaN 防护+**破坏命令门禁**：delete/doc -s/exit/win -c 需 `confirm=true`）——只在 edit 工具覆盖不到的场景用。
 - 其它：`origin_status.capabilities.known_risks` 是本机版本坑清单（如 plotxy 在 2026b 的 box/bar 已走官方模板规避）。
 - 部署/客户端兼容性（Kimi Code / Cursor / Claude Desktop / WorkBuddy / DSH）见仓库 **COMPATIBILITY.md**。
 

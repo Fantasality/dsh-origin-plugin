@@ -116,11 +116,15 @@ TOOL_CATALOG = [
     {"name": "origin_peak_fit", "group": "拟合与统计", "desc": "多峰拟合（Gauss/Lorentz 分峰，核磁/XPS/拉曼/红外）"},
     {"name": "origin_mask_points", "group": "数据编辑", "desc": "屏蔽指定数据点（NaN 化隐藏错误点，可逆）"},
     {"name": "origin_add_line", "group": "细粒度编辑", "desc": "画辅助线（vertical/horizontal/slope，Tafel 外推/阈值线）"},
-    {"name": "origin_labtalk", "group": "连接与诊断", "desc": "任意 LabTalk 执行（逃生舱；带激活+读回+NaN 防护）"},
+    {"name": "origin_labtalk", "group": "连接与诊断", "desc": "任意 LabTalk 执行（逃生舱；带激活+读回+NaN 防护+破坏命令门禁 confirm）"},
+    {"name": "origin_release", "group": "连接与诊断", "desc": "释放自动化连接（Origin 保持打开交给用户手动操作；下次调用自动重连）"},
+    {"name": "origin_reconnect", "group": "连接与诊断", "desc": "显式重连 Origin（release 后恢复自动化）"},
     # edit
     {"name": "origin_filter_data", "group": "数据编辑", "desc": "删除/裁剪数据点（写回原工作表）"},
+    {"name": "origin_manage_plots", "group": "细粒度编辑", "desc": "数据图管理：remove 删曲线 / change_data 换数据源"},
+    {"name": "origin_manage_data", "group": "数据编辑", "desc": "工作表数据管理：sort 按列排序整表 / transpose 行列转置（新表）"},
     # fit / analysis
-    {"name": "origin_fit", "group": "拟合与统计", "desc": "线性/非线性拟合，拟合曲线上图"},
+    {"name": "origin_fit", "group": "拟合与统计", "desc": "线性/非线性拟合（初值/固定参数/加权列，拟合曲线上图）"},
     {"name": "origin_stats", "group": "拟合与统计", "desc": "描述统计 count/mean/std/.../skew"},
     {"name": "origin_transform", "group": "拟合与统计", "desc": "smooth/normalize/derivative/interpolate"},
     {"name": "origin_integrate", "group": "拟合与统计", "desc": "梯形法 AUC"},
@@ -328,17 +332,68 @@ def origin_add_line(graph: str, orientation: str = "vertical",
 
 @mcp.tool()
 def origin_labtalk(script: str, read_expr: str = "", graph: str = "",
-                   read_kind: str = "auto") -> dict:
+                   read_kind: str = "auto", confirm: bool = False) -> dict:
     """执行任意 LabTalk 并可选读回（逃生舱：SKILL 未覆盖的功能由此直达）。
 
     graph 非空时先激活该图页（否则裸表达式可能静默落到错误窗口）。
     read_expr 如 "layer.x.from"、"page.nlayers"、"layer.y.title$"，
     读回为 NaN 时明确标注 unreliable（不会假成功）。
+    破坏性命令（delete / doc -s / exit / win -c 等）默认拦截并返回
+    labtalk_blocked；确认确需执行时带 confirm=true 放行。
     优先用专用工具（origin_edit_* 等已内置激活+读回），仅当专用工具
     覆盖不到时才用本工具。
     """
     return engine.labtalk(script, read_expr=read_expr or None,
-                          graph=graph or None, read_kind=read_kind)
+                          graph=graph or None, read_kind=read_kind,
+                          confirm=bool(confirm))
+
+
+@mcp.tool()
+def origin_release() -> dict:
+    """释放自动化连接但保持 Origin 打开（把 Origin 交给用户手动操作）。
+
+    适用：AI 完成绘图后用户要手动微调；释放后用户操作不会被自动化干扰。
+    下次任意 origin_* 工具调用会自动重连，无需先调 reconnect。
+    """
+    return engine.release()
+
+
+@mcp.tool()
+def origin_reconnect() -> dict:
+    """显式重连 Origin COM 自动化服务器（release 后恢复；已连接时幂等）。"""
+    return engine.reconnect()
+
+
+@mcp.tool()
+def origin_manage_plots(graph: str, action: str, plot_index: int = 0,
+                        data_worksheet: str = "", x_col: str = "",
+                        y_col: str = "") -> dict:
+    """数据图管理：remove 删除指定曲线 / change_data 更换数据源。
+
+    Args:
+        graph: 图页短名（origin_list_graphs 获取）。
+        action: "remove" | "change_data"。
+        plot_index: 曲线索引从 0 起（第 N 条 -> N-1）。
+        data_worksheet: change_data 的新数据工作表名。
+        x_col / y_col: change_data 的新 X/Y 列（至少给一个；列名或索引）。
+    """
+    return engine.manage_plots(graph, action, plot_index=plot_index,
+                               data_worksheet=data_worksheet or None,
+                               x_col=x_col or None, y_col=y_col or None)
+
+
+@mcp.tool()
+def origin_manage_data(worksheet: str, action: str, col: str = "0",
+                       dec: bool = False) -> dict:
+    """工作表数据管理：sort 按某列排序整表 / transpose 行列转置（写新表，原表不动）。
+
+    Args:
+        worksheet: 工作表引用。
+        action: "sort" | "transpose"。
+        col: sort 的关键列（列名或索引；transpose 忽略）。
+        dec: sort 是否降序（默认升序）。
+    """
+    return engine.manage_data(worksheet, action, col=col, dec=dec)
 
 
 @mcp.tool()
@@ -860,16 +915,27 @@ def origin_filter_data(worksheet: str, drop_rows: list = None,
 def origin_fit(worksheet: str, x_column: str = "", y_column: str = "",
                kind: str = "linear", plot_curve: bool = True,
                graph: str = "", title: str = "",
-               drop_report_pages: bool = True) -> dict:
+               drop_report_pages: bool = True,
+               initial_params: dict = None, fixed_params: dict = None,
+               weight_col: str = "") -> dict:
     """对工作表数据做曲线拟合，可选把拟合曲线加到图上。
 
     kind 支持 linear 与 Origin 内置 NLFit 名（ExpDec1/Gauss/Lorentz/Boltzmann/
     DoseResp/MichaelisMenten/Logistic/Poly2...，返回值带 supported_kinds 清单）。
     drop_report_pages=True 自动关闭 NLFit 的 FitLine*/Residual* 报告副产品页。
+
+    收敛控制（P0-4）：
+    initial_params: NLFit 初值 dict，如 {"A": 1.5, "xc": 5.0}（改善收敛速度）。
+    fixed_params: 固定参数。NLFit 传 {"A": true} 固定该参数（或给数值=固定为该值）；
+      linear 传 {"slope": 0.0} / {"intercept": 0.0} 固定为指定值。
+    weight_col: NLFit 加权列（y 误差列，走 yerr 通道）；linear 不支持加权。
     """
     return engine.fit(worksheet, x_column or 0, y_column or 1, kind=kind,
                       plot_curve=plot_curve, graph=graph or None,
-                      title=title or None, drop_report_pages=drop_report_pages)
+                      title=title or None, drop_report_pages=drop_report_pages,
+                      initial_params=initial_params,
+                      fixed_params=fixed_params,
+                      weight_col=weight_col or None)
 
 
 @mcp.tool()

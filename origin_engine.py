@@ -168,11 +168,17 @@ class _TaskResult:
         self.exc = e
         self._evt.set()
 
-    def wait(self):
-        self._evt.wait()
-        if self.exc is not None:
+    def wait(self, timeout=None):
+        """等待完成；带 timeout 时返回是否在时限内完成（不抛出结果）。"""
+        if timeout is None:
+            self._evt.wait()
+            if self.exc is not None:
+                raise self.exc
+            return self.value
+        ok = self._evt.wait(timeout)
+        if ok and self.exc is not None:
             raise self.exc
-        return self.value
+        return ok
 
 
 def _com_thread_loop():
@@ -192,8 +198,100 @@ def _com_thread_loop():
             done.set_exception(e)
 
 
+def _watchdog_origin_pids():
+    """Origin 进程 PID 集合（tasklist 输出为 GBK，中文 Windows 实测）。"""
+    import subprocess as _sp
+    try:
+        out = _sp.run(
+            ["tasklist", "/FI", "IMAGENAME eq Origin64.exe", "/FO", "CSV"],
+            capture_output=True).stdout.decode("gbk", errors="replace")
+        return {int(line.split('","')[1]) for line in out.splitlines()
+                if line.startswith('"Origin')}
+    except Exception:
+        return set()
+
+
+def _watchdog_dismiss_modals():
+    """枚举 Origin 的可见模态对话框并点击白名单按钮（看门狗，P0-1）。
+
+    返回 [{"title": 窗口标题, "clicked": 按钮文本}]；找不到/点不掉的弹窗只记标题。
+    机制（2026-09-16 探针实证）：EnumWindows 找 Origin PID 的 #32770 类
+    可见对话框 → EnumChildWindows 找按钮 → PostMessage(BM_CLICK) 异步点击。
+    """
+    results = []
+    try:
+        import win32gui
+        import win32con
+        import win32process
+    except ImportError:
+        return results  # 无 pywin32：看门狗降级（直接走超时分支）
+    pids = _watchdog_origin_pids()
+    if not pids:
+        return results
+    found = []
+
+    def _cb(h, _):
+        try:
+            if (win32gui.GetClassName(h) == "#32770"
+                    and win32gui.IsWindowVisible(h)):
+                _, pid = win32process.GetWindowThreadProcessId(h)
+                if pid in pids:
+                    found.append((h, win32gui.GetWindowText(h)))
+        except Exception:
+            pass
+
+    try:
+        win32gui.EnumWindows(_cb, None)
+    except Exception:
+        return results
+    for h, title in found:
+        entry = {"title": title, "clicked": None}
+        try:
+            buttons = []
+            win32gui.EnumChildWindows(
+                h, lambda b, _: buttons.append((b, win32gui.GetWindowText(b))),
+                None)
+            entry["buttons"] = [t for _, t in buttons]
+            for b, txt in buttons:
+                if txt in ("OK", "确定", "Yes", "是", "No", "否",
+                           "Close", "关闭", "Cancel", "取消"):
+                    win32gui.PostMessage(b, win32con.BM_CLICK, 0, 0)
+                    entry["clicked"] = txt
+                    break
+        except Exception:
+            pass
+        results.append(entry)
+    return results
+
+
+def _watchdog_timeout_secs():
+    """COM 软超时（秒）：DSH_ORIGIN_DISPATCH_TIMEOUT 覆盖，默认 90。
+
+    依据：大项目（实测 800 页堆积）单次 close 枚举可达 59s——60s 会误杀
+    慢但正常的调用，取 90s（对齐 youngminsw 默认）。
+    """
+    try:
+        return max(10.0, float(os.environ.get("DSH_ORIGIN_DISPATCH_TIMEOUT", 90)))
+    except (TypeError, ValueError):
+        return 90.0
+
+
+def _watchdog_grace_secs():
+    """点击对话框后再等待（秒）：DSH_ORIGIN_WATCHDOG_GRACE，默认 15。"""
+    try:
+        return max(2.0, float(os.environ.get("DSH_ORIGIN_WATCHDOG_GRACE", 15)))
+    except (TypeError, ValueError):
+        return 15.0
+
+
 def _run_on_com_thread(fn, *args, **kwargs):
-    """把 fn 投递到专用 COM 线程执行并等待结果（线程安全，可被并发调用）。"""
+    """把 fn 投递到专用 COM 线程执行并等待结果（线程安全，可被并发调用）。
+
+    P0-1 看门狗（2026-09-16）：软超时后枚举 Origin 模态对话框并自动点击
+    白名单按钮（OK/确定/取消类）；解除阻塞则正常返回并附
+    watchdog_dismissed；仍未解除则硬超时——重建 COM 线程自愈，返回
+    com_blocked_by_dialog 错误（含最后看到的对话框标题）。
+    """
     global _com_thread
     if _com_thread is None or not _com_thread.is_alive():
         t = threading.Thread(target=_com_thread_loop, name="origin-com", daemon=True)
@@ -201,7 +299,48 @@ def _run_on_com_thread(fn, *args, **kwargs):
         _com_thread = t
     done = _TaskResult()
     _com_queue.put((fn, args, kwargs, done))
-    return done.wait()
+    # 阶段 1：软超时内正常等待
+    if done.wait(timeout=_watchdog_timeout_secs()):
+        return done.value
+    # 阶段 2：看门狗——尝试点掉 Origin 的模态对话框
+    dismissed = _watchdog_dismiss_modals()
+    if done.wait(timeout=_watchdog_grace_secs()):
+        v = done.value
+        # 恢复正常：原结果附加看门狗信息（dict 与 connect 的 (bool, dict) 都覆盖）
+        note = (f"本次调用曾被 Origin 模态对话框阻塞，看门狗已自动解除: {dismissed}")
+        if isinstance(v, dict):
+            v["watchdog_dismissed"] = dismissed
+            v["warning"] = (v.get("warning") + "；" if v.get("warning") else "") + note
+        elif (isinstance(v, tuple) and len(v) == 2 and isinstance(v[1], dict)):
+            v[1]["watchdog_dismissed"] = dismissed
+            v[1]["warning"] = ((v[1].get("warning") or "") + "；"
+                               if v[1].get("warning") else "") + note
+        return v
+    # 阶段 3：硬超时——看门狗无效。旧 COM 线程仍堵在 Origin 内部调用上，
+    # 只有 Origin 进程结束该调用才会异常返回（随后队列自愈继续）。
+    titles = [d.get("title", "?") for d in dismissed]
+    if _autokill_enabled():
+        # isolated 会话（或显式开启）：Origin 视为自动化残留，直接清理，
+        # COM 线程的下一次队列任务会收到异常并继续——系统自愈。
+        kill = _kill_residual_origin(wait_seconds=2.0)
+        return oerr.fail(
+            "com_blocked_by_dialog",
+            f"COM 调用被 Origin 模态对话框阻塞超过 "
+            f"{_watchdog_timeout_secs():.0f}+{_watchdog_grace_secs():.0f} 秒，"
+            f"看门狗未能解除（发现对话框: {titles or '未枚举到'}）。"
+            f"已按 isolated 策略自动清理 Origin（killed={kill.get('killed')}），"
+            "请重试；Origin 将以干净状态重连。",
+            watchdog={"dismissed": dismissed, "autokill": kill},
+            timeout_s=_watchdog_timeout_secs() + _watchdog_grace_secs())
+    return oerr.fail(
+        "com_blocked_by_dialog",
+        f"COM 调用被 Origin 模态对话框阻塞超过 "
+        f"{_watchdog_timeout_secs():.0f}+{_watchdog_grace_secs():.0f} 秒，"
+        f"看门狗未能解除（发现对话框: {titles or '未枚举到'}）。"
+        "请在 Origin 窗口手动关闭该对话框后原样重试；若 Origin 已无响应，"
+        "taskkill /F /IM Origin64.exe 后重连。",
+        watchdog={"dismissed": dismissed},
+        timeout_s=_watchdog_timeout_secs() + _watchdog_grace_secs())
 
 
 def _configure_ipc_lock_if_requested():
@@ -1087,7 +1226,8 @@ def _filter_data_impl(worksheet, drop_rows=None, x_column=0, x_min=None, x_max=N
 
 
 def _fit_impl(worksheet, x_column, y_column, kind="linear", plot_curve=True,
-              graph=None, title=None, drop_report_pages=True):
+              graph=None, title=None, drop_report_pages=True,
+              initial_params=None, fixed_params=None, weight_col=None):
     """拟合：linear（线性）或 Origin 内置拟合函数名（如 ExpDec1/Gauss/...）。
 
     supported_kinds（2026-09-16 补齐，此前模型名是"暗知识"只能蒙）：
@@ -1098,6 +1238,14 @@ def _fit_impl(worksheet, x_column, y_column, kind="linear", plot_curve=True,
     drop_report_pages=True（默认）：自动关闭 NLFit 产生的 FitLine*/Residual*
     报告副产品页面 —— 参数与报告已在返回值里，页面留着会爆窗口
     （2026-09-16 实测 7 次 fit 多开 14 页）。
+
+    P0-4（2026-09-16 探针实证 originpro 1.1.15 API）：
+    initial_params={"A": 1.5, ...}   NLFit 初值（set_param）；显著影响收敛速度
+    fixed_params={"A": true} 或 {"slope": 1.0}
+        - NLFit：fix_param(name, True) 固定该参数（不回归，误差 e_=0）
+        - linear：{"slope": v} -> lr.fix_slope(v)，{"intercept": v} -> fix_intercept(v)
+    weight_col=y误差列               NLFit 加权拟合（set_data 的 yerr 通道；
+        linear 不支持加权，显式拒绝）
 
     返回: {"ok": True, "kind": ..., "parameters": {...}, "report": ..., "fit_curves": ...,
            "graph": 可选（拟合曲线已上图时）}
@@ -1141,6 +1289,14 @@ def _fit_impl(worksheet, x_column, y_column, kind="linear", plot_curve=True,
         # Origin 拟合器对 NaN 行会产生数值爆炸 slope≈-8e53）。
         # 有 NaN 时把有效行写临时表再拟合。
         nan_dropped = 0
+        _initial_applied, _fixed_applied = {}, {}
+        _widx = None
+        if weight_col is not None:
+            _widx = _col_index_impl(wks, weight_col)
+            if _widx is None:
+                return oerr.fail("invalid_request",
+                                 f"weight_col 列不存在: {weight_col!r}",
+                                 worksheet=str(wks))
         try:
             import numpy as _npf
             _xi0 = _col_index_impl(wks, x_column)
@@ -1148,20 +1304,48 @@ def _fit_impl(worksheet, x_column, y_column, kind="linear", plot_curve=True,
             if _xi0 is not None and _yi0 is not None:
                 _xv0 = _npf.asarray(wks.to_list(_xi0), dtype=float)
                 _yv0 = _npf.asarray(wks.to_list(_yi0), dtype=float)
+                _wv0 = (_npf.asarray(wks.to_list(_widx), dtype=float)
+                        if _widx is not None else None)
                 _m = _npf.isfinite(_xv0) & _npf.isfinite(_yv0)
+                if _wv0 is not None:
+                    _m = _m & _npf.isfinite(_wv0)
                 if not _m.all():
                     _tmp = op.new_sheet("w", _new_unique_name("FitClean"))
                     _tmp.from_list(0, [round(float(v), 10)
                                        for v in _xv0[_m]], lname="x")
                     _tmp.from_list(1, [round(float(v), 10)
                                        for v in _yv0[_m]], lname="y")
+                    if _wv0 is not None:
+                        _tmp.from_list(2, [round(float(v), 10)
+                                           for v in _wv0[_m]], lname="w")
                     nan_dropped = int((~_m).sum())
                     wks, x_column, y_column = _tmp, 0, 1
+                    if _wv0 is not None:
+                        weight_col = 2      # 权重列已搬到临时表第 3 列
         except Exception:
             nan_dropped = 0
         if kind == "linear":
+            if weight_col is not None:
+                return oerr.fail(
+                    "invalid_request",
+                    "linear 拟合暂不支持 weight_col 加权（originpro LinearFit "
+                    "无 yerr 通道）；需要加权请改用 NLFit kind（如 Gauss）",
+                    kind="linear", weight_col=str(weight_col))
             lr = op.LinearFit()
             lr.set_data(wks, x_column, y_column)
+            if isinstance(fixed_params, dict):
+                for _fp, _fv in fixed_params.items():
+                    _k = str(_fp).lower()
+                    try:
+                        if _k in ("slope", "斜率"):
+                            lr.fix_slope(float(_fv))
+                        elif _k in ("intercept", "截距"):
+                            lr.fix_intercept(float(_fv))
+                        else:
+                            continue
+                        _fixed_applied[_k] = float(_fv)
+                    except Exception:
+                        pass
             res = lr.result()
             try:
                 parameters = {
@@ -1182,7 +1366,33 @@ def _fit_impl(worksheet, x_column, y_column, kind="linear", plot_curve=True,
             fit_kind = "linear"
         else:
             model = op.NLFit(kind)          # kind = Origin 内置函数名
-            model.set_data(wks, x_column, y_column)
+            # P0-4：weight_col 走 set_data 的 yerr 通道（探针实证签名）
+            if weight_col is not None:
+                model.set_data(wks, x_column, y_column, yerr=weight_col)
+            else:
+                model.set_data(wks, x_column, y_column)
+            # 初值与固定参数（探针实证：set_param('A', 1.5) / fix_param('A', True)）
+            if isinstance(initial_params, dict):
+                for _ip, _iv in initial_params.items():
+                    try:
+                        model.set_param(str(_ip), float(_iv))
+                        _initial_applied[str(_ip)] = float(_iv)
+                    except Exception:
+                        pass
+            if isinstance(fixed_params, dict):
+                for _fp, _fv in fixed_params.items():
+                    if isinstance(_fv, str) and _fv.lower() in ("true", "yes", "1"):
+                        _fv = True
+                    try:
+                        if _fv is True or _fv == 1:
+                            model.fix_param(str(_fp), True)
+                            _fixed_applied[str(_fp)] = True
+                        else:               # 给了数值 = 固定为该值
+                            model.set_param(str(_fp), float(_fv))
+                            model.fix_param(str(_fp), True)
+                            _fixed_applied[str(_fp)] = float(_fv)
+                    except Exception:
+                        pass
             model.fit()
             rep, curves = model.report()    # 必须先 report
             res = model.result()
@@ -1193,6 +1403,11 @@ def _fit_impl(worksheet, x_column, y_column, kind="linear", plot_curve=True,
                 if isinstance(v, (int, float)) and not k.startswith(
                         ("f_", "s_", "u_", "l_", "ub", "lb", "e_", "Data")):
                     parameters[k] = v
+            # 固定参数的误差显式回传（固定后 e_=0.0，是"确实没动"的证据）
+            for _fk in _fixed_applied:
+                _ek = f"e_{_fk}"
+                if _ek in res and isinstance(res[_ek], (int, float)):
+                    parameters[_ek] = res[_ek]
             fit_kind = kind
 
         result = {
@@ -1204,6 +1419,12 @@ def _fit_impl(worksheet, x_column, y_column, kind="linear", plot_curve=True,
             "worksheet": str(wks),
             "nan_dropped": nan_dropped,
             "supported_kinds": FIT_SUPPORTED_KINDS,
+            "fit_options": {
+                "initial_params_applied": _initial_applied,
+                "fixed_params_applied": _fixed_applied,
+                "weight_col": (str(weight_col)
+                               if weight_col is not None else None),
+            },
             "detail": (f"{fit_kind} 拟合完成，参数见 parameters"
                        + (f"（已滤除 {nan_dropped} 个 NaN 行）"
                           if nan_dropped else "")),
@@ -1801,18 +2022,96 @@ def _add_line_impl(graph, orientation="vertical", at=None, slope=None,
 # ---------------------------------------------------------------------------
 # 任意 LabTalk 执行（逃生舱；带激活 + 读回 + NaN 防护）
 # ---------------------------------------------------------------------------
-def _labtalk_impl(script, read_expr=None, graph=None, read_kind="auto"):
+# P0-2（2026-09-16）：LabTalk 破坏命令门禁。语句首 token 匹配黑名单即拒绝，
+# confirm=True 显式放行。字符串字面量与注释内的 token 豁免（分词时维护引号状态）。
+_LABTALK_DESTRUCTIVE = {
+    "delete",     # 删除对象（delete Book1 / delete %H...）
+    "exit",       # 退出 Origin
+    "quit",       # 退出 Origin（别名）
+    "doc",        # doc -s 清空工程 / doc -uw 等破坏性子开关
+    "kill",       # 删除数据集/变量
+    "purge",      # 清理工程对象
+}
+_LABTALK_DESTRUCTIVE_SUBCMD = {"doc": {"-s", "-sr", "-uw"}}
+
+
+def _labtalk_gate(script):
+    """返回 None（放行）或 (bad_token, context)（拦截）。P0-2。
+
+    按语句（分号/换行分隔）取首 token；引号内的内容跳过，避免
+    'wks.colWidth$="delete"' 这类字符串误杀。
+    """
+    s = str(script or "")
+    tokens, i, n, in_str = [], 0, len(s), False
+    cur = []
+    statements = []
+    while i < n:
+        ch = s[i]
+        if in_str:
+            if ch == '"':
+                in_str = False
+            i += 1
+            continue
+        if ch == '"':
+            in_str = True
+            if cur:
+                statements.append("".join(cur))
+                cur = []
+            i += 1
+            continue
+        if ch in ";#\n":
+            if cur:
+                statements.append("".join(cur))
+                cur = []
+            if ch == "#":          # 注释：跳过本行剩余
+                while i < n and s[i] not in "\n":
+                    i += 1
+            i += 1
+            continue
+        cur.append(ch)
+        i += 1
+    if cur:
+        statements.append("".join(cur))
+    for stmt in statements:
+        parts = stmt.strip().split()
+        if not parts:
+            continue
+        head = parts[0].lower()
+        if head in _LABTALK_DESTRUCTIVE:
+            sub = {p.lower() for p in parts[1:]}
+            if head == "doc" and not (sub & _LABTALK_DESTRUCTIVE_SUBCMD["doc"]):
+                continue          # doc 非 -s/-sr/-uw 子开关放行
+            return head, stmt.strip()[:120]
+        # win -c（关窗口）/win -ch 也破坏
+        if head == "win" and len(parts) > 1 and parts[1].lower() in ("-c", "-ch", "-cd"):
+            return "win -c", stmt.strip()[:120]
+    return None
+
+
+def _labtalk_impl(script, read_expr=None, graph=None, read_kind="auto",
+                  confirm=False):
     """执行一段 LabTalk 并可选读回表达式值（带激活复核与 NaN 判定）。
 
     这是给高级用户的逃生舱：SKILL 里没有覆盖到的 Origin 功能可由此直达。
     graph 给定且非空时先激活该图页（否则 LabTalk 裸表达式可能静默落到
     错误窗口 —— 通道纪律，见 SKILL 附录 C）。
     read_expr: 如 "layer.x.from"、"page.nlayers"、'layer.y.title$'。
+    confirm=True 时放行破坏性命令（delete/doc -s/exit 等，P0-2 默认拦截）。
     """
     try:
         ok, conn = _connect_impl()
         if not ok:
             return conn
+        # P0-2：破坏命令门禁（confirm=True 显式放行）
+        bad = _labtalk_gate(script)
+        if bad is not None and not confirm:
+            return oerr.fail(
+                "labtalk_blocked",
+                f"脚本包含破坏性命令 {bad[0]!r}（语句: {bad[1]}），默认拦截",
+                script=str(script)[:200],
+                next_actions=["确认无误后带 confirm=true 重发",
+                              "或改用等价的非破坏命令"],
+                destructive_token=bad[0], statement=bad[1])
         op = _origin_app
         # 阻塞型命令防护（d15 实测：type -b 弹模态对话框把 Origin 卡死 10 分钟，
         # COM 全程无响应，只能 GUI 点击解除）。逃生舱不放火烧船。
@@ -2569,6 +2868,10 @@ def _help_impl():
             "origin_error_codes": "列出全部稳定错误码与恢复建议",
             "origin_diagnose": "系统级自检：Origin 安装/COM 注册/残留进程/导出目录权限（连接失败先调它）",
             "origin_cookbook": "场景→工具组合速查：常见调用链 + 推荐默认参数 + 快速/正式路径",
+            "origin_release": "释放自动化连接（Origin 保持打开交给用户手动操作；下次调用自动重连）",
+            "origin_reconnect": "显式重连 Origin（release 后恢复；已连接时幂等）",
+            "origin_manage_plots": "数据图管理：remove 删曲线 / change_data 换数据源",
+            "origin_manage_data": "工作表数据管理：sort 按列排序整表 / transpose 行列转置（新表）",
         },
         "templates": [
             "折线图: origin_plot_file(columns, plot_type='line')",
@@ -4347,6 +4650,123 @@ def _inspect_graph_impl(graph=None, max_plots=40):
         return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
 
 
+# P0-5（2026-09-16）：细粒度数据图管理 —— remove_plot / change_data
+# （探针实证：gl.remove_plot(int) 走 obj.Destroy()；pl.change_data(wks, x=, y=)
+#   按设计标签换数据源）
+def _manage_plots_impl(graph, action, plot_index=0,
+                       data_worksheet=None, x_col=None, y_col=None):
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        gp = op.find_graph(graph)
+        if not gp:
+            return oerr.fail("graph_not_found",
+                             f"图不存在: {graph}", graph=graph)
+        gl = gp[0]
+        plots = gl.plot_list()
+        n = len(plots)
+        if action == "remove":
+            if not (0 <= int(plot_index) < n):
+                return oerr.fail("invalid_request",
+                                 f"plot_index {plot_index} 越界（图内共 {n} 条曲线）",
+                                 plot_count=n)
+            plots[int(plot_index)].remove()
+            gl.rescale()
+            after = len(gl.plot_list())
+            return oerr.ok(
+                graph=graph, removed=plot_index, plots_after=after,
+                detail=f"已删除第 {int(plot_index) + 1} 条曲线"
+                       f"（索引 {plot_index}），剩余 {after} 条")
+        if action == "change_data":
+            if data_worksheet is None:
+                return oerr.fail("invalid_request",
+                                 "change_data 需要 data_worksheet（工作表名）与 "
+                                 "x_col/y_col（新数据列）")
+            wks = op.find_sheet("w", data_worksheet)
+            if not wks:
+                return oerr.fail("worksheet_not_found",
+                                 f"工作表不存在: {data_worksheet}")
+            if not (0 <= int(plot_index) < n):
+                return oerr.fail("invalid_request",
+                                 f"plot_index {plot_index} 越界（图内共 {n} 条曲线）",
+                                 plot_count=n)
+            kw = {}
+            if y_col is not None:
+                kw["y"] = y_col
+            if x_col is not None:
+                kw["x"] = x_col
+            if not kw:
+                return oerr.fail("invalid_request",
+                                 "change_data 至少需要 x_col 或 y_col 之一")
+            plots[int(plot_index)].change_data(wks, **kw)
+            gl.rescale()
+            return oerr.ok(
+                graph=graph, changed=plot_index, data_worksheet=str(wks),
+                x_col=x_col, y_col=y_col,
+                detail=f"第 {int(plot_index) + 1} 条曲线数据源已换为 "
+                       f"{data_worksheet}（x={x_col}, y={y_col}）；"
+                       "建议 origin_verify_graph 复核")
+        return oerr.fail("invalid_request",
+                         f"action 只支持 remove/change_data，收到 {action!r}")
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
+# P0-5（2026-09-16）：工作表 sort / transpose
+# （探针实证：wks.sort(col, dec=False) 签名；transpose 无原生 API，走 Python 侧
+#   读列-转置-写新表，首行不自动当列标题）
+def _manage_data_impl(worksheet, action, col=0, dec=False):
+    try:
+        ok, conn = _connect_impl()
+        if not ok:
+            return conn
+        op = _origin_app
+        wks = op.find_sheet("w", worksheet)
+        if not wks:
+            return oerr.fail("worksheet_not_found",
+                             f"工作表不存在: {worksheet}")
+        if action == "sort":
+            cidx = _col_index_impl(wks, col)
+            if cidx is None:
+                return oerr.fail("invalid_request",
+                                 f"排序列不存在: {col!r}", worksheet=str(wks))
+            wks.sort(cidx, bool(dec))
+            first = (wks.to_list(0)[:1] or [None])[0]
+            return oerr.ok(
+                worksheet=str(wks), sorted_by=str(col), descending=bool(dec),
+                first_row_sample=first,
+                detail=f"已按列 {col!r} {'降' if dec else '升'}序排序整表")
+        if action == "transpose":
+            ncols, nrows = wks.cols, wks.rows
+            if nrows == 0 or ncols == 0:
+                return oerr.fail("invalid_request", "空表无法转置",
+                                 worksheet=str(wks))
+            if nrows > 1000:
+                return oerr.fail(
+                    "invalid_request",
+                    f"转置保护：原表 {nrows} 行将变成 {nrows} 列，超过 1000 列上限；"
+                    "如确需大表转置请在 Origin 内手动操作",
+                    rows=nrows, cols=ncols)
+            cols_data = [wks.to_list(j) for j in range(ncols)]
+            bk = op.new_book("w", _new_unique_name("Transposed"))
+            tw = bk[0]
+            for i in range(nrows):               # 原表第 i 行 -> 新表第 i 列
+                tw.from_list(i, [cols_data[j][i]
+                                 for j in range(ncols)],
+                             lname=f"R{i + 1}")
+            return oerr.ok(
+                worksheet=str(tw), source=str(wks),
+                rows=ncols, cols=nrows,
+                detail=f"已转置 {nrows}行×{ncols}列 -> {nrows}列×{ncols}行，"
+                       f"写入新表 {tw}（原表未动；转置后首行是数据不是标题）")
+        return oerr.fail("invalid_request",
+                         f"action 只支持 sort/transpose，收到 {action!r}")
+    except Exception as e:
+        return oerr.from_exception(e, trace=traceback.format_exc(limit=3))
+
+
 def _edit_plot_impl(graph, edits):
     try:
         ok, conn = _connect_impl()
@@ -4456,9 +4876,64 @@ def shutdown(timeout=5.0):
     return {"ok": True, "thread_stopped": stopped}
 
 
+# --- P0-3（2026-09-16）：release / reconnect —— 把 Origin 让给用户手动操作 ---
+def _release_impl():
+    """释放自动化引用但**不关闭 Origin**：用户可立即手动操作 Origin 窗口。
+
+    注意：只清 COM 引用（_connected/_origin_app），**不停专用 COM 线程**——
+    线程内已 CoInitialize 的 originpro 状态必须与线程绑定（实测停线程后
+    新线程重连会原生崩溃 EXIT=127）；下次任意工具调用在同一线程重连（Attach）。
+    """
+    global _connected, _origin_app
+    origin_still_running = _origin_running()
+    _connected = False
+    _origin_app = None
+    return {"ok": True, "released": True,
+            "origin_still_running": origin_still_running,
+            "detail": "已释放自动化连接；Origin 窗口保持打开，可手动操作。"
+                      "下次任意工具调用将自动重连。"}
+
+
+def _reconnect_impl():
+    """显式重连 Origin（release 后恢复自动化；幂等——已连接时原样返回状态）。"""
+    ok, conn = _connect_impl()
+    if not ok:
+        return conn
+    conn["detail"] = "已重连 Origin COM 自动化服务器" + (
+        "（此前为 release 状态）" if not conn.get("origin_running_before", True) else "")
+    return conn
+
+
 @_synchronized
 def status():
     return _status_impl()
+
+
+@_synchronized
+def release():
+    """P0-3：释放自动化连接（Origin 保持打开，交给用户手动操作）。"""
+    return _release_impl()
+
+
+@_synchronized
+def reconnect():
+    """P0-3：显式重连 Origin COM 自动化服务器。"""
+    return _reconnect_impl()
+
+
+@_synchronized
+def manage_plots(graph, action, plot_index=0,
+                 data_worksheet=None, x_col=None, y_col=None):
+    """P0-5：数据图管理（remove 删曲线 / change_data 换数据源）。"""
+    return _manage_plots_impl(graph, action, plot_index=plot_index,
+                              data_worksheet=data_worksheet,
+                              x_col=x_col, y_col=y_col)
+
+
+@_synchronized
+def manage_data(worksheet, action, col=0, dec=False):
+    """P0-5：工作表数据管理（sort 排序 / transpose 转置）。"""
+    return _manage_data_impl(worksheet, action, col=col, dec=dec)
 
 
 @_synchronized
@@ -4508,9 +4983,12 @@ def filter_data(worksheet, drop_rows=None, x_column=0, x_min=None, x_max=None):
 
 @_synchronized
 def fit(worksheet, x_column, y_column, kind="linear", plot_curve=True,
-        graph=None, title=None, drop_report_pages=True):
+        graph=None, title=None, drop_report_pages=True,
+        initial_params=None, fixed_params=None, weight_col=None):
     return _fit_impl(worksheet, x_column, y_column, kind=kind, plot_curve=plot_curve,
-                     graph=graph, title=title, drop_report_pages=drop_report_pages)
+                     graph=graph, title=title, drop_report_pages=drop_report_pages,
+                     initial_params=initial_params, fixed_params=fixed_params,
+                     weight_col=weight_col)
 
 
 @_synchronized
@@ -4708,9 +5186,10 @@ def add_line(graph, orientation="vertical", at=None, slope=None,
 
 
 @_synchronized
-def labtalk(script, read_expr=None, graph=None, read_kind="auto"):
+def labtalk(script, read_expr=None, graph=None, read_kind="auto",
+            confirm=False):
     return _labtalk_impl(script, read_expr=read_expr, graph=graph,
-                         read_kind=read_kind)
+                         read_kind=read_kind, confirm=bool(confirm))
 
 
 def plot_template(template_id, data, graph_name=None, title=None,
