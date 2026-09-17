@@ -40,14 +40,15 @@ jobs:
         run: python -X utf8 -m pytest tests/ -q
 
       - name: Skill consistency (no phantom tools)
-        run: python -X utf8 -c "import re,importlib.util;spec=importlib.util.spec_from_file_location('oms','origin_mcp_server.py');m=importlib.util.module_from_spec(spec);import sys;sys.modules['oms']=m;spec.loader.exec_module(m);names=set(m._build_tool_registry());WL={'origin_busy_user_session','origin_edit'};bad=[];
-import pathlib
-for p in ['skills/origin-plotting/SKILL.md','skills/origin-stats/SKILL.md','skills/origin-scripting/SKILL.md']:
+        run: python -X utf8 -c "import re,importlib.util,pathlib,sys;spec=importlib.util.spec_from_file_location('oms','origin_mcp_server.py');m=importlib.util.module_from_spec(spec);sys.modules['oms']=m;spec.loader.exec_module(m);names=set(m._build_tool_registry());
+# 白名单：错误码与非工具的模块名/脚本名（会被 origin_* 正则误抓）
+WL={'origin_busy_user_session','origin_edit','origin_mcp_stdio','origin_mcp_server'};bad=[]
+for p in ['skills/origin-plotting/SKILL.md','skills/origin-stats/SKILL.md','skills/origin-scripting/SKILL.md','skills/install-dsh-origin/SKILL.md']:
     t=pathlib.Path(p).read_text(encoding='utf-8')
     g=[n for n in {x.rstrip('_') for x in re.findall(r'origin_[a-z0-9_]+',t)}-WL if n not in names and n!='origin_edit']
     print(p,'ghosts:',g or 'none');bad+=g
 print('RESULT:','PASS' if not bad and len(names)>=70 else 'FAIL')
-import sys as _s; _s.exit(1 if bad else 0)"
+sys.exit(1 if bad else 0)"
 
       - name: Proof-level unit test
         run: python -X utf8 smoke/proof_verify.py
