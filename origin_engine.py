@@ -2124,8 +2124,46 @@ def _labtalk_gate(script):
     return None
 
 
+# 阶段 D（2026-09-17）：LabTalk **静默失败**陷阱名单（甲烷 NMR 案例复盘）。
+# 这些命令不报错、不返回错误码，只会"悄悄不干活"（写空列/中断脚本/读不到值），
+# AI 只能靠渲染-看图-再调来发现——每踩一个坑烧 2-4 轮。这里在引擎层直接拦截
+# 并给出替代写法，把"文档级提醒"升级为"引擎级门禁"。
+import re as _re
+
+_LABTALK_SILENT_TRAPS = [
+    (_re.compile(r"\bgrand\s*\(", _re.I),
+     "grand()（高斯随机）在本构建不可用且静默写空。替代：rnd()（均匀随机），"
+     "或在数据源端预生成高斯噪声"),
+    (_re.compile(r"\bdata\s*\(\s*-?\d", _re.I),
+     "data(n1,n2) 在本构建不填充列（静默失败）。替代：loop(ii,1,n) 显式逐行赋值"),
+    (_re.compile(r"\[LName\]\s*\$", _re.I),
+     "col(N)[LName]$ 会静默中断脚本。替代：wks.colN.lname$ = \"长名\""),
+    (_re.compile(r"\bnlabels\b|\blabel\.count\b|\bnobjects\b", _re.I),
+     "label.count / layer.nlabels / layer.nobjects 在本构建不可解析。"
+     "替代：标注对象自动命名 Text1..TextN，用 origin_layout_info 列出"),
+    (_re.compile(r"type\s*:?=\s*(204|215)\b", _re.I),
+     "plotxy 的 type 204/215 在 2026b 不可用（已知风险）。"
+     "替代：originpro gl.add_plot(..., type='l'/'s'/'y'/'c')"),
+]
+
+
+def _labtalk_silent_trap(script):
+    """返回 None（放行）或 (trap_label, alternative, statement)。
+
+    与破坏门禁不同：静默陷阱**默认拦截**（因为它们必然造成隐性返工），
+    force_silent=True 时放行给确知风险的高级用户。
+    """
+    s = str(script or "")
+    for pat, alt in _LABTALK_SILENT_TRAPS:
+        m = pat.search(s)
+        if m:
+            frag = s[max(0, m.start() - 20):m.end() + 40].strip()
+            return pat.pattern[:36], alt, frag[:120]
+    return None
+
+
 def _labtalk_impl(script, read_expr=None, graph=None, read_kind="auto",
-                  confirm=False):
+                  confirm=False, force_silent=False):
     """执行一段 LabTalk 并可选读回表达式值（带激活复核与 NaN 判定）。
 
     这是给高级用户的逃生舱：SKILL 里没有覆盖到的 Origin 功能可由此直达。
@@ -2133,6 +2171,8 @@ def _labtalk_impl(script, read_expr=None, graph=None, read_kind="auto",
     错误窗口 —— 通道纪律，见 SKILL 附录 C）。
     read_expr: 如 "layer.x.from"、"page.nlayers"、'layer.y.title$'。
     confirm=True 时放行破坏性命令（delete/doc -s/exit 等，P0-2 默认拦截）。
+    force_silent=True 时放行已知静默失败命令（grand()/data()/[LName]$ 等，
+    阶段 D 默认拦截并给替代写法——这些命令不报错只悄悄不干活，返工成本极高）。
     """
     try:
         ok, conn = _connect_impl()
@@ -2148,6 +2188,19 @@ def _labtalk_impl(script, read_expr=None, graph=None, read_kind="auto",
                 next_actions=["确认无误后带 confirm=true 重发",
                               "或改用等价的非破坏命令"],
                 destructive_token=bad[0], statement=bad[1])
+        # 阶段 D：静默失败陷阱门禁（force_silent=True 显式放行）
+        if not force_silent:
+            trap = _labtalk_silent_trap(script)
+            if trap is not None:
+                return oerr.fail(
+                    "labtalk_silent_trap",
+                    f"脚本包含已知静默失败命令 {trap[0]!r}（片段: {trap[2]}），"
+                    "默认拦截——这些命令不报错但悄悄不干活",
+                    script=str(script)[:200],
+                    alternative=trap[1],
+                    next_actions=["按 alternative 里的替代写法改写脚本",
+                                  "确知风险仍要执行则带 force_silent=true 重发"],
+                    trap=trap[0])
         op = _origin_app
         # 阻塞型命令防护（d15 实测：type -b 弹模态对话框把 Origin 卡死 10 分钟，
         # COM 全程无响应，只能 GUI 点击解除）。逃生舱不放火烧船。
@@ -5082,11 +5135,12 @@ def figure(columns=None, data_source=None, intent="auto", plot_type=None,
            x_column=None, y_columns=None, style_mode="default", family=None,
            fmt="png", file_path=None, output_dir=None, width=1200,
            graph_name=None, title=None, verify=True, deliver=False,
-           source_path=None):
+           source_path=None, label_peaks=False, peak_top_n=5):
     """端到端一张图：导入/写数 → 画图 →（可选）verify → 导出 →（可选）交付。
 
     把常用路径从 6-10 次工具调用收敛为 1 次（性能分析：感知耗时的 80% 在
     模型决策轮次）。返回带 steps 逐步耗时与汇总 proof_level。
+    label_peaks=True 时自动找峰并标注（NMR/PL/拉曼标峰场景）。
     """
     ok, conn = _connect_impl()
     if not ok:
@@ -5099,7 +5153,8 @@ def figure(columns=None, data_source=None, intent="auto", plot_type=None,
                          family=family, fmt=fmt, file_path=file_path,
                          output_dir=output_dir, width=width,
                          graph_name=graph_name, title=title, verify=verify,
-                         deliver=deliver, source_path=source_path)
+                         deliver=deliver, source_path=source_path,
+                         label_peaks=label_peaks, peak_top_n=peak_top_n)
     return _pf.annotate(r)
 
 
@@ -5160,6 +5215,59 @@ def capability_diff():
     """能力表 vs 引擎硬编码 PLOT_TYPES 的差异（暴露文档/实现脱节）。"""
     import origin_capabilities as _oc
     return _oc.compare_against_hardcoded_impl()
+
+
+# --- 阶段 D（2026-09-17）：标注盲试治理 —— layout_info / annotate / simulate / find_peaks ---
+@_synchronized
+def origin_annotate(graph, items, style=None):
+    """批量文本标注：一次调用加 N 个文本（统一样式、可选左对齐）。
+
+    治理"标注盲试循环"（甲烷 NMR 案例：放两行注释烧了 15 次 add_text）。
+    返回逐项落位与 LabTalk 对象名（TextN，可后续微调）。
+    """
+    ok, conn = _connect_impl()
+    if not ok:
+        return conn
+    import origin_annotate as _oa
+    return _oa.annotate_impl(_origin_app, _origin_app.po, graph, items,
+                             style=style)
+
+
+@_synchronized
+def layout_info(graph, width_px=1100):
+    """返回布局几何：坐标映射（数据↔像素，反向轴自动处理）、轴范围、页尺寸、
+    现有文本对象清单、图例位置。AI 用它精确落位，不再渲染-看图-再调。"""
+    ok, conn = _connect_impl()
+    if not ok:
+        return conn
+    import origin_annotate as _oa
+    return _oa.layout_info_impl(_origin_app, _origin_app.po, graph,
+                                width_px=width_px)
+
+
+def simulate(kind="lorentzian", centers=None, widths=None, heights=None,
+             n_points=2000, x_range=None, noise=0.01, seed=None,
+             x_label="x", y_label="y_simulated"):
+    """物理模型谱图模拟（多峰 + 噪声，纯 numpy 不连 Origin）。
+
+    返回强制带 simulated=True——图注与报告必须注明"模拟数据"，
+    不得作为实验数据呈现（项目纪律：不虚构数据）。
+    """
+    import origin_annotate as _oa
+    return _oa.simulate_impl(kind=kind, centers=centers, widths=widths,
+                             heights=heights, n_points=n_points,
+                             x_range=x_range, noise=noise, seed=seed,
+                             x_label=x_label, y_label=y_label)
+
+
+def find_peaks(x_list, y_list, top_n=5, min_height_frac=0.05,
+               label_template="{x:.2f}", x_prefix=""):
+    """找局部极大峰（纯 numpy），返回可直接转 origin_annotate items 的峰列表。"""
+    import origin_annotate as _oa
+    return _oa.find_peaks_impl(x_list, y_list, top_n=top_n,
+                               min_height_frac=min_height_frac,
+                               label_template=label_template,
+                               x_prefix=x_prefix)
 
 
 @_synchronized
@@ -5413,9 +5521,10 @@ def add_line(graph, orientation="vertical", at=None, slope=None,
 
 @_synchronized
 def labtalk(script, read_expr=None, graph=None, read_kind="auto",
-            confirm=False):
+            confirm=False, force_silent=False):
     return _labtalk_impl(script, read_expr=read_expr, graph=graph,
-                         read_kind=read_kind, confirm=bool(confirm))
+                         read_kind=read_kind, confirm=bool(confirm),
+                         force_silent=bool(force_silent))
 
 
 def plot_template(template_id, data, graph_name=None, title=None,

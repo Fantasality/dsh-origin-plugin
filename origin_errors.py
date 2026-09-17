@@ -197,6 +197,11 @@ CODE_META: Dict[str, tuple] = {
         ["无法从本机 Origin 安装提取能力表（未找到 oPlotIDs.h）",
          "确认 Origin 安装完整；或用 origin_status 查内建能力清单"],
     ),
+    "labtalk_silent_trap": (
+        True,
+        ["脚本含已知静默失败命令（不报错但悄悄不干活）",
+         "按返回的 alternative 换替代写法；确知风险可带 force_silent=true 放行"],
+    ),
 }
 
 VALID_CODES = frozenset(CODE_META)
@@ -366,6 +371,11 @@ RECOVERY_MAP: Dict[str, Dict[str, Any]] = {
         "policy": RECOVERY_POLICY_REPLAN,
         "diagnose": ["origin_diagnose 确认 Origin 安装与路径",
                      "origin_status 查内建能力清单作为替代"],
+    },
+    "labtalk_silent_trap": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["读 alternative 字段里的替代写法并改写脚本",
+                     "COMPATIBILITY.md 有完整静默失败清单"],
     },
 }
 

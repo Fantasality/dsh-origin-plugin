@@ -1,6 +1,38 @@
 # Changelog
 
-## 2.7.0 (2026-09-17)
+## 2.7.1 (2026-09-17)
+
+**标注盲试治理 + Nature 预设 + 静默陷阱门禁**（甲烷 NMR 案例复盘：150+ 轮/30 分钟）。
+
+### 新工具（70 → 74）
+- **`origin_annotate`**：批量文本标注——一次调用加 N 个文本（统一样式/可选左对齐），
+  返回逐项落位与 LabTalk 对象名（TextN）。消灭渲染-看图-再调循环。
+- **`origin_layout_info`**：布局几何一次返回——数据↔像素映射（**反向轴自动翻转**）、
+  轴范围、页尺寸(cm)、现有文本对象（TextN 清单）、图例位置。标注前先调它，精确落位。
+- **`origin_simulate`**：物理模型谱图模拟（Lorentzian/Gaussian/Voigt 多峰+噪声），
+  返回 columns 可直接喂 origin_figure；**强制 simulated=true 标记**（不虚构数据纪律）。
+- **`origin_find_peaks`**：找局部极大峰（numpy），返回可转标注的峰列表。
+
+### 增强
+- **`origin_figure intent="nature"`**：Nature 单栏预设（89mm@600dpi=2100px + journal 样式，
+  依据 Nature 官方 research-figure-guide：文字 5-7pt、Arial/Helvetica、线图 ≥1000dpi）。
+- **`origin_figure label_peaks=true`**：自动找峰并标注（NMR/PL/拉曼标峰一次成型，
+  标注自动抬升量程 6% 落峰顶上方，返回 TextN 对象名）。
+- **LabTalk 静默陷阱门禁（引擎级）**：grand() / data(n1,n2) / col()[LName]$ /
+  nlabels/label.count / plotxy 204/215 —— 不报错但悄悄不干活，默认拦截并给替代写法
+  （force_silent=true 显式放行）。新错误码 labtalk_silent_trap。
+- **`origin_labtalk` 新增 force_silent 参数**。
+
+### 文档
+- **新增 docs/FIGURE-STYLE-GUIDE.md**：化学各领域图样式规范知识库——Nature 官方硬性
+  规范（89/183mm、5-7pt、1000dpi、Okabe-Ito 色盲调色板）+ NMR/XRD/Raman/FTIR/UV-Vis/
+  电化学(CV·GCD·EIS·Tafel)/SEM·TEM/热分析 各子领域轴方向与标注惯例 + 通用规范与本项目快捷入口。
+
+### 验证
+甲烷 NMR 同任务复刻：simulate→figure(label_peaks)→annotate→delivery 全链真机通过；
+回归 offline + pytest 15 + 四 SKILL 一致性 + 视觉基准 22/22 全绿。
+
+## 2.7.0 (2026-09-17)## 2.7.0 (2026-09-17)
 
 **战略评估后的阶段 A/B/C 全量实施**（70 工具 / 34 错误码）。
 

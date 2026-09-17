@@ -102,6 +102,11 @@ TOOL_CATALOG = [
     {"name": "origin_template_apply", "group": "交付与验证", "desc": "把模板样式套到指定图（逐项 status 回报）"},
     {"name": "origin_capabilities", "group": "连接与诊断", "desc": "从本机 Origin 安装 oPlotIDs.h 提取真实图型能力表"},
     {"name": "origin_capability_diff", "group": "连接与诊断", "desc": "能力表 vs 引擎硬编码图型表的差异（暴露文档/实现脱节）"},
+    # 阶段 D（标注盲试治理）
+    {"name": "origin_layout_info", "group": "细粒度编辑", "desc": "布局几何一次返回：数据↔像素映射（反向轴自动处理）、轴范围、页尺寸、现有文本对象、图例位置——标注落位不再靠试"},
+    {"name": "origin_annotate", "group": "细粒度编辑", "desc": "批量文本标注：一次调用加 N 个文本（统一样式/可选左对齐），返回 LabTalk 对象名（TextN）供微调"},
+    {"name": "origin_simulate", "group": "数据分析", "desc": "物理模型谱图模拟（Lorentzian/Gaussian/Voigt 多峰+噪声，强制 simulated 标记；用于方法演示与拟合验证）"},
+    {"name": "origin_find_peaks", "group": "数据分析", "desc": "找局部极大峰（numpy，返回可直接转标注的峰列表）"},
     # plot / export
     {"name": "origin_plot", "group": "画图", "desc": "基于工作表画图（含 histogram/box/bar，可传 style_mode/family/style_overrides）"},
     {"name": "origin_plot_file", "group": "画图", "desc": "一键 写数+画图+导出（最常用）"},
@@ -349,7 +354,8 @@ def origin_add_line(graph: str, orientation: str = "vertical",
 
 @mcp.tool()
 def origin_labtalk(script: str, read_expr: str = "", graph: str = "",
-                   read_kind: str = "auto", confirm: bool = False) -> dict:
+                   read_kind: str = "auto", confirm: bool = False,
+                   force_silent: bool = False) -> dict:
     """执行任意 LabTalk 并可选读回（逃生舱：SKILL 未覆盖的功能由此直达）。
 
     graph 非空时先激活该图页（否则裸表达式可能静默落到错误窗口）。
@@ -362,7 +368,7 @@ def origin_labtalk(script: str, read_expr: str = "", graph: str = "",
     """
     return engine.labtalk(script, read_expr=read_expr or None,
                           graph=graph or None, read_kind=read_kind,
-                          confirm=bool(confirm))
+                          confirm=bool(confirm), force_silent=bool(force_silent))
 
 
 @mcp.tool()
@@ -520,7 +526,8 @@ def origin_figure(columns: dict = None, data_source: str = "",
                   fmt: str = "png", file_path: str = "", output_dir: str = "",
                   width: int = 1200, graph_name: str = "", title: str = "",
                   verify: bool = True, deliver: bool = False,
-                  source_path: str = "") -> dict:
+                  source_path: str = "", label_peaks: bool = False,
+                  peak_top_n: int = 5) -> dict:
     """端到端一张图：一次调用完成 导入/写数 → 画图 →（可选）验证 → 导出 →（可选）交付。
 
     这是**提速主路径**——把常用流程从 6-10 次工具调用收敛为 1 次（性能分析：
@@ -531,6 +538,7 @@ def origin_figure(columns: dict = None, data_source: str = "",
         data_source: 本地 CSV/XLSX 路径（优先于 columns）。
         intent: auto | journal（期刊单栏）| presentation | quick（800px 快速预览）。
         verify: 是否跑一次 origin_verify_graph（默认 True）。
+        label_peaks: True 时自动找峰并标注（NMR/PL/拉曼标峰场景，一次成型）。
         deliver: 是否额外做一键交付目录（图片+OPJU+csv+报告）。
     返回：graph / file / steps（逐步耗时 ms）/ proof_level（verified|readback_only|unverified）。
     """
@@ -542,7 +550,8 @@ def origin_figure(columns: dict = None, data_source: str = "",
                          output_dir=output_dir or None, width=width,
                          graph_name=graph_name or None, title=title or None,
                          verify=verify, deliver=deliver,
-                         source_path=source_path or None)
+                         source_path=source_path or None,
+                         label_peaks=label_peaks, peak_top_n=peak_top_n)
 
 
 @mcp.tool()
@@ -597,6 +606,58 @@ def origin_capabilities(force_refresh: bool = False) -> dict:
 def origin_capability_diff() -> dict:
     """能力表 vs 引擎硬编码图型表的差异（暴露文档/实现脱节）。"""
     return engine.capability_diff()
+
+
+@mcp.tool()
+def origin_layout_info(graph: str, width_px: int = 1100) -> dict:
+    """布局几何一次返回：数据↔像素映射（反向轴自动翻转）、轴范围、页尺寸(cm)、
+    现有文本对象清单（TextN）、图例位置。
+
+    标注/图例落位前**先调这个**——用它精确计算坐标，替代"渲染-看图-再调"的试错循环
+    （甲烷 NMR 案例：两行注释烧了 15 次 add_text 的教训）。
+    """
+    return engine.layout_info(graph, width_px=width_px)
+
+
+@mcp.tool()
+def origin_annotate(graph: str, items: list, style: dict = None) -> dict:
+    """批量文本标注：一次调用加 N 个文本，统一样式，返回逐项落位与对象名。
+
+    items: [{"text":"...","x":数据坐标,"y":数据坐标,"size"?:7,"color"?:Origin色号,"bold"?:false}]
+    style: {"size":7, "just_left":true(尝试左对齐，不支持时标注 just_applied=false)}
+    先调 origin_layout_info 拿映射再算坐标；返回的 object_name（TextN）可用
+    origin_labtalk 后续微调。
+    """
+    return engine.origin_annotate(graph, items, style=style)
+
+
+@mcp.tool()
+def origin_simulate(kind: str = "lorentzian", centers: list = None,
+                    widths: list = None, heights: list = None,
+                    n_points: int = 2000, x_range: list = None,
+                    noise: float = 0.01, seed: int = None,
+                    x_label: str = "x", y_label: str = "y_simulated") -> dict:
+    """物理模型谱图模拟（多峰+噪声，纯计算）。返回 columns 可直接喂 origin_figure。
+
+    ⚠️ 返回强制 simulated=true：图注与报告必须注明"模拟数据"，
+    不得作为实验数据呈现（项目纪律：不虚构数据）。本工具用于方法演示与拟合验证。
+    kind: lorentzian | gaussian | pseudovoigt；width=FWHM。
+    """
+    return engine.simulate(kind=kind, centers=centers, widths=widths,
+                           heights=heights, n_points=n_points, x_range=x_range,
+                           noise=noise, seed=seed, x_label=x_label,
+                           y_label=y_label)
+
+
+@mcp.tool()
+def origin_find_peaks(x_list: list, y_list: list, top_n: int = 5,
+                      min_height_frac: float = 0.05,
+                      label_template: str = "{x:.2f}", x_prefix: str = "") -> dict:
+    """找局部极大峰（numpy）。返回 peaks=[{x,y,label}]，可直接转 origin_annotate
+    的 items（建议 y 抬升量程 5% 放峰顶上方）。"""
+    return engine.find_peaks(x_list, y_list, top_n=top_n,
+                             min_height_frac=min_height_frac,
+                             label_template=label_template, x_prefix=x_prefix)
 
 
 @mcp.tool()

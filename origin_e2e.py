@@ -53,9 +53,9 @@ def _resolve_op(op):
 
 
 def _style_mode_for_intent(intent, style_mode):
-    """intent 隐含排版风格：journal/presentation 自动带对应 style_mode（显式传入优先）。"""
+    """intent 隐含排版风格：journal/presentation/nature 自动带对应 style_mode（显式传入优先）。"""
     intent = (intent or "auto").lower()
-    if intent == "journal" and (style_mode or "default") == "default":
+    if intent in ("journal", "nature") and (style_mode or "default") == "default":
         return "journal"
     if intent == "presentation" and (style_mode or "default") == "default":
         return "presentation"
@@ -63,12 +63,18 @@ def _style_mode_for_intent(intent, style_mode):
 
 
 def _width_for_intent(intent, width):
-    """intent 隐含目标媒介尺寸（像素）；auto 用调用方给的 width。"""
+    """intent 隐含目标媒介尺寸（像素）；auto 用调用方给的 width。
+
+    nature = Nature 单栏 89mm：8.9cm @ 600dpi ≈ 2102px（Nature 官方
+    research-figure-guide：单栏 89mm、文字 5-7pt、线图 ≥1000dpi）。
+    """
     intent = (intent or "auto").lower()
     if intent == "quick":
         return 800                       # 低分辨率快速预览
     if intent == "journal":
         return 900                       # 期刊单栏（~3.5inch @ 300dpi）
+    if intent == "nature":
+        return 2100                      # Nature 单栏 89mm @ 600dpi
     if intent == "presentation":
         return 1920                      # 演示大屏
     return width                         # auto：尊重调用方参数（默认 1200）
@@ -90,7 +96,8 @@ def _min_font_for_style(style_mode):
 def figure_impl(op, columns=None, data_source=None, intent="auto", plot_type=None,
                 x_column=None, y_columns=None, style_mode="default", family=None,
                 fmt="png", file_path=None, output_dir=None, width=1200, graph_name=None,
-                title=None, verify=True, deliver=False, source_path=None):
+                title=None, verify=True, deliver=False, source_path=None,
+                label_peaks=False, peak_top_n=5):
     """一次调用画出一张图：导入/写数 → 画图 →（可选）套样式 →（可选）verify
     → 导出 →（可选）一键交付。
 
@@ -141,6 +148,7 @@ def figure_impl(op, columns=None, data_source=None, intent="auto", plot_type=Non
     if op is None:
         return oerr.fail("connection_error", "无法取得 Origin COM 句柄")
 
+    import origin_annotate as _oa
     intent = (intent or "auto").lower()
     style_mode = _style_mode_for_intent(intent, style_mode)
     width = _width_for_intent(intent, width)
@@ -178,7 +186,44 @@ def figure_impl(op, columns=None, data_source=None, intent="auto", plot_type=Non
     plotted_y = r_plot.get("y_columns") or []
     n_series = len(plotted_y)
 
-    # --- 4. 验证（全程只跑一次，读回后即停，不重复 activate/inspect）---
+    # --- 4. 标峰（label_peaks=True 时：找局部极大 → 批量标注 δ 值，一次成型）---
+    # 注意：峰查找用**原始内联 columns**（_write_data 返回的 columns 是列名列表不是数据）；
+    # data_source（文件导入）场景无内联数据，提示改用 origin_find_peaks + origin_annotate。
+    peak_labels = None
+    if label_peaks:
+        if not isinstance(columns, dict) or not columns:
+            peak_labels = {"n": 0,
+                           "note": "label_peaks 仅支持内联 columns 数据；"
+                                   "文件导入请用 origin_find_peaks + origin_annotate 手动标注"}
+        else:
+            all_names = list(columns.keys())
+            x_key = x_column or (all_names[0] if all_names else None)
+            y_key = (plotted_y[0] if plotted_y else
+                     (all_names[1] if len(all_names) > 1 else None))
+            x_data = columns.get(x_key) if x_key else None
+            y_data = columns.get(y_key) if y_key else None
+            r_peaks = _step("find_peaks", lambda: _eng.find_peaks(
+                x_data, y_data, top_n=int(peak_top_n)))
+            if r_peaks is not None and r_peaks.get("ok") and r_peaks.get("peaks"):
+                y_all = y_data or []
+                y_min = min(y_all) if y_all else 0.0
+                y_max = max(y_all) if y_all else 1.0
+                lift = (y_max - y_min) * 0.06      # 标注抬升量程 6%，落峰顶上方
+                items = [{"text": pk.get("label", ""), "x": pk.get("x"),
+                          "y": pk.get("y", 0) + lift, "size": 7.0}
+                         for pk in (r_peaks.get("peaks") or [])]
+                r_anno = _step("annotate_peaks", lambda: _oa.annotate_impl(
+                    op, op.po, graph, items, style={"size": 7.0}))
+                peak_labels = {"n": len(items),
+                               "labels": [pk.get("label") for pk in
+                                          (r_peaks.get("peaks") or [])],
+                               "objects": [r.get("object_name") for r in
+                                           (r_anno.get("results") or [])]}
+            else:
+                peak_labels = {"n": 0, "detail": "找峰失败：" +
+                               str((r_peaks or {}).get("error", ""))[:80]}
+
+    # --- 5. 验证（全程只跑一次，读回后即停，不重复 activate/inspect）---
     proof_level = PROOF_UNVERIFIED
     r_verify = None
     if verify:
@@ -193,7 +238,7 @@ def figure_impl(op, columns=None, data_source=None, intent="auto", plot_type=Non
             # verify 自身报错（读不回来）→ 视为未能读回
             proof_level = PROOF_UNVERIFIED
 
-    # --- 5. 导出 ---
+    # --- 6. 导出 ---
     r_export = _step("export", lambda: _eng._export_impl(
         graph, file_path=file_path, fmt=fmt, width=width, output_dir=output_dir))
     if r_export is None or not r_export.get("ok"):
@@ -203,7 +248,7 @@ def figure_impl(op, columns=None, data_source=None, intent="auto", plot_type=Non
             graph=graph, steps=steps, proof_level=proof_level,
             timings={"total_ms": _now_ms() - wall0})
 
-    # --- 6. 交付（复用已有图，不重画；deliver=False 时跳过）---
+    # --- 7. 交付（复用已有图，不重画；deliver=False 时跳过）---
     delivery = None
     if deliver:
         r_deliver = _step("deliver", lambda: _eng._export_delivery_impl(
@@ -231,6 +276,7 @@ def figure_impl(op, columns=None, data_source=None, intent="auto", plot_type=Non
                             for c in ((r_verify or {}).get("checks") or [])]}
                 if verify else None),
         proof_level=proof_level,
+        peak_labels=peak_labels,
         delivery=delivery,
         steps=steps,
         timings={"total_ms": total_ms,
