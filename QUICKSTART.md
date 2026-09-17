@@ -50,9 +50,17 @@
 
 ## 方式三：一键接入 MCP 客户端
 
-适合：Cursor / Claude Desktop / Kimi Code / Cline / Continue / VS Code 等支持 MCP 的客户端。
+适合：Cursor / Claude Desktop / Kimi Code / Cline / Continue / VS Code / WorkBuddy 等支持 MCP 的客户端。
 
-**A. 自动写配置（推荐）**
+**A. 让 AI 帮你装（最省事，推荐）**
+
+把 [`skills/install-dsh-origin/SKILL.md`](skills/install-dsh-origin/SKILL.md) 这个文件**发给任意 AI**（贴内容、或让它读这个文件），对它说：
+
+> 按这个手册帮我把 dsh-origin-plugin 装好并验证可用。
+
+它会替你检查环境、找 Python、写客户端配置、重启后验证——你什么都不用懂。
+
+**B. 自动写配置**
 ```
 python install.py
 ```
@@ -101,10 +109,25 @@ python origin_mcp_http.py --port 8731
 
 ---
 
+## 国内加速 / 镜像
+
+| 场景 | 地址 | 说明 |
+|---|---|---|
+| npm 安装加速 | `npm install -g dsh-origin-plugin --registry=https://registry.npmmirror.com` | 淘宝 npm 镜像，已同步最新版 |
+| npm 包主页 | https://npmmirror.com/package/dsh-origin-plugin | 可查看版本与下载量 |
+| GitHub 下载加速 | 把 `github.com` 换成 `ghproxy.com/https://github.com`（例：`ghproxy.com/https://github.com/Fantasality/dsh-origin-plugin/archive/refs/tags/v2.7.0.tar.gz`） | Release 源码包加速 |
+| 插件市场 | DSH 桌面端市场搜 `dsh-origin`（1024Store / dshfind） | 国内直连，无需科学上网 |
+
+> ⚠️ **市场里可能显示旧版本**：目录源缓存会滞后（例如停在 2.2.1）。
+> 想用最新版，就用上面的 npm 命令装，或直接指定版本：`npm install -g dsh-origin-plugin@2.7.0`。
+
+---
+
 ## 常见问题
 
 | 现象 | 怎么办 |
 |---|---|
+| **装到了旧版本**（比如 2.2.1） | 目录源缓存导致。用 `npm install -g dsh-origin-plugin@2.7.0` 指定版本；或把上面那个 SKILL 文件发给 AI 让它处理 |
 | 连不上 Origin | 先让 AI 调 `origin_diagnose`（检查安装 / COM 注册 / 残留进程 / 导出目录权限）。Origin 没开时插件会自动拉起它 |
 | 中文路径/中文列名乱码 | 已内置处理（编码自动探测）。若仍异常，把文件移到纯英文路径再试 |
 | 感觉慢 | ①让 AI 用 `origin_figure` 一次画完 ②先跑 `origin_warmup` 预热 ③项目里图页太多（>200）时跑 `origin_pages_gc`——实测 793 页会让某些操作慢 30 倍 |
