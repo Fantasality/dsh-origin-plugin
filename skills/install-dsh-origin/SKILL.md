@@ -92,8 +92,9 @@ Kimi Code / Gemini CLI / Trae / Zed / Continue / Codex CLI —— 结构不同�
    > 豆包 / 公司自研的 XX —— 有名字我就能找到它的配置文件；不确定的话，
    > 在客户端设置里找 'MCP' 或 '模型上下文协议' 字样）"
 2. 用户答不上来时，**列出候选让用户指认**：
-   > "是不是下面这些之一：Cursor、Claude Desktop、VS Code、Cline、Windsurf、
-   > Kimi Code、Gemini CLI、Codex、Trae、Zed、Continue、WorkBuddy？"
+   > "是不是下面这些之一：**豆包**、**Cherry Studio**、Cursor、Claude Desktop、
+   > VS Code、Cline、Windsurf、Kimi Code、Gemini CLI、Codex、Trae、Zed、Continue、
+   > 通义灵码、腾讯元宝、Chatbox、WorkBuddy？"
 3. **都没有 / 是自研客户端** → 给用户通用片段，让他粘到客户端的 MCP 设置里：
    ```json
    {"mcpServers": {"dsh-origin": {"command": "<PYTHON>", "args": ["<PKG_DIR>\\origin_mcp_stdio.py"]}}}
@@ -120,6 +121,48 @@ Kimi Code / Gemini CLI / Trae / Zed / Continue / Codex CLI —— 结构不同�
 | Continue | `%USERPROFILE%\.continue\config.json` | `experimental.modelContextProtocolServers`（数组） |
 | Codex CLI | `%USERPROFILE%\.codex\config.toml` | TOML：`[mcp_servers.dsh-origin]` 段 |
 | **DSH（DeepSeek Harness）** | **不走 mcp.json** | 用插件市场搜 `dsh-origin`；或读本仓库 SKILL |
+| **Cherry Studio** | `%APPDATA%\cherry-studio\config.json` | `mcpServers`（元素还需 `type:"stdio"`、`isActive:true`；也可用 UI：设置 → MCP 服务器 → 添加） |
+
+### 3.4 「UI 里添加」型客户端（配置文件位置随版本变，**不要猜路径**）
+
+这些客户端在**设置界面**里加 MCP，直接引导用户点：
+
+| 客户端 | 怎么做 |
+|---|---|
+| **豆包（Doubao）** | 见下方 3.5 专项——豆包有**两条路**，优先走"操作电脑"模式 |
+| 通义灵码（阿里） | 插件设置里找 **MCP / 工具** → 添加服务器 → 填命令与参数 |
+| 腾讯元宝（PC 端） | 设置里找 **扩展 / 工具 / MCP** 入口；找不到就用兜底第 4 步（让它自己配） |
+| Chatbox | 设置 → **MCP** → 添加 → 类型选 stdio → 填命令与参数 |
+| LobeChat / Open WebUI / Dify | 这些是**服务端/自托管**客户端，在各自的"工具/MCP 插件"配置里加；填的是同样的命令与参数 |
+
+引导话术（通用）：
+> "在设置里找 **MCP**、**工具**、**插件**、**扩展** 这几个字眼，找到『添加服务器』，
+> 类型选 **stdio / 本地命令**，命令填 `<PYTHON>`，参数填 `<PKG_DIR>\origin_mcp_stdio.py`。"
+
+### 3.5 豆包专项（用户量最大，两条路都要会讲）
+
+**路 A：配 MCP（常规）**
+1. 打开豆包 **电脑客户端** → 设置 → 找 **MCP 管理**（或"插件管理"）
+2. 添加本地服务，启动命令填：
+   ```json
+   {"mcpServers": {"dsh-origin": {"command": "<PYTHON>", "args": ["<PKG_DIR>\\origin_mcp_stdio.py"]}}}
+   ```
+3. 保存后豆包会自己拉起这个本地进程（stdio，不需要公网地址与密钥）
+
+**路 B：开"操作电脑"模式（豆包独有，且更适合小白）**
+> 豆包 Windows/Mac 桌面版有 **工作任务模式 → 选择"本地电脑" → 技能栏点"操作电脑" → 授权**，
+> 之后豆包可以**直接看屏幕、移鼠标、点按钮**（截图 OCR + UI 元素检测驱动，
+> 不侵入应用内存），完全**不需要 MCP、API 或插件**。
+>
+> 对只用 Origin 画几张图的用户，这条路更快：用户说"打开 Origin，把 D 盘那个 CSV 画成折线图并导出 PNG"，
+> 豆包就自己点。**代价**：慢（走人眼/人手路径）、且每步都要用户看着。
+>
+> 什么时候推荐哪条：**要重复做、要精确、要批量 → 配 MCP（路 A）；就画一两张、不想配置 → 操作电脑（路 B）**。
+
+**怎么跟用户解释差别**（照抄即可）：
+> "两条路你挑：①配 MCP，之后你说一句它就精确出图（1 秒），但要先配一次；
+> ②开『操作电脑』模式，不用配置，但它像真人一样点鼠标，慢一些也需要你看屏幕。
+> 想长期用建议 ①，只想试一次用 ②。"
 
 写入注意：
 - **路径里的反斜杠要转义成 `\\`**（JSON 语法）

@@ -49,7 +49,12 @@ CLIENTS = {
     "zed": os.path.expandvars(r"%APPDATA%\Zed\settings.json"),
     "continue": os.path.expandvars(r"%USERPROFILE%\.continue\config.json"),
     "codex": os.path.expandvars(r"%USERPROFILE%\.codex\config.toml"),
+    # Cherry Studio：主配置里就是 mcpServers（UI：设置 → MCP 服务器 → 添加）
+    "cherry-studio": os.path.expandvars(r"%APPDATA%\cherry-studio\config.json"),
 }
+# 只在 UI 里配 MCP 的客户端（配置文件位置随版本变，不猜路径，给 UI 步骤）：
+#   豆包 / 通义灵码 / 腾讯元宝 / Chatbox / LobeChat / Open WebUI / Dify
+#   见 skills/install-dsh-origin/SKILL.md 第 3.4 节「UI 里添加」
 # 注意：DSH 不用 mcp.json（它走 cordis.patch.yml / 插件市场），单独提示，不在这里配置
 DSH_HOME = os.path.expandvars(r"%USERPROFILE%\.dsh")
 
@@ -247,7 +252,11 @@ def main(argv=None) -> int:
         elif args.remove:
             status, detail = _remove_server(path, args.name)
         else:
-            status, detail = _write_server(path, args.name, server_cfg,
+            # Cherry Studio 的 mcpServers 元素还认 type/isActive 字段（缺了它在 UI 里显示为停用）
+            cfg = dict(server_cfg)
+            if name == "cherry-studio":
+                cfg.update({"type": "stdio", "isActive": True})
+            status, detail = _write_server(path, args.name, cfg,
                                            assume_yes=args.yes)
         mark = {"ok": "[√]", "skip": "[-]", "fail": "[x]"}.get(status, "[?]")
         print(f"  {mark} {name}: {detail}")
