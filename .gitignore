@@ -20,3 +20,11 @@ Thumbs.db
 # release tarballs / local notes
 *.tgz
 RELEASE_NOTES_*.md
+
+# 发布产物（不进 git）
+dist/
+*.tgz
+build/
+*.egg-info/
+build/
+*.egg-info/

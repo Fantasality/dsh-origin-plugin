@@ -1,0 +1,53 @@
+name: CI
+
+# 离线门禁：不需要 Origin（真机集成测试由本地冒烟脚本负责）。
+#
+# 覆盖三件事：
+#   1. --offline-test   引擎/工具目录/错误码表自洽
+#   2. pytest           离线单测（错误码表、LabTalk 门禁、白名单、FigureSpec 闭环、
+#                       PLAN_STALE、目录结构）；tests/test_live.py 无 Origin 自动 skip
+#   3. SKILL 一致性     SKILL 里提到的 origin_* 工具必须真实注册（零幽灵）
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gate:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -q
+          pip install pytest pyyaml pillow -q
+
+      - name: Offline engine test
+        run: python -X utf8 origin_mcp_server.py --offline-test
+
+      - name: Pytest (live tests auto-skip without Origin)
+        run: python -X utf8 -m pytest tests/ -q
+
+      - name: Skill consistency (no phantom tools)
+        run: python -X utf8 -c "import re,importlib.util;spec=importlib.util.spec_from_file_location('oms','origin_mcp_server.py');m=importlib.util.module_from_spec(spec);import sys;sys.modules['oms']=m;spec.loader.exec_module(m);names=set(m._build_tool_registry());WL={'origin_busy_user_session','origin_edit'};bad=[];
+import pathlib
+for p in ['skills/origin-plotting/SKILL.md','skills/origin-stats/SKILL.md','skills/origin-scripting/SKILL.md']:
+    t=pathlib.Path(p).read_text(encoding='utf-8')
+    g=[n for n in {x.rstrip('_') for x in re.findall(r'origin_[a-z0-9_]+',t)}-WL if n not in names and n!='origin_edit']
+    print(p,'ghosts:',g or 'none');bad+=g
+print('RESULT:','PASS' if not bad and len(names)>=70 else 'FAIL')
+import sys as _s; _s.exit(1 if bad else 0)"
+
+      - name: Proof-level unit test
+        run: python -X utf8 smoke/proof_verify.py

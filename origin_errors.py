@@ -179,6 +179,24 @@ CODE_META: Dict[str, tuple] = {
         ["路径不在 DSH_ORIGIN_ALLOWED_ROOTS 白名单内（安全策略拦截）",
          "让用户调整白名单环境变量（分号分隔多个前缀），或把文件移入允许目录"],
     ),
+    "template_exists": (
+        True,
+        ["同名模板已存在", "传 overwrite=true 覆盖，或换个模板名"],
+    ),
+    "template_not_found": (
+        True,
+        ["模板不存在", "origin_template_list 查看可用模板名后重试"],
+    ),
+    "no_style_snapshot": (
+        True,
+        ["该模板没有可套用的样式快照（可能是空模板或非本插件存的模板）",
+         "用 origin_template_save 从一张成品图重新存样式快照"],
+    ),
+    "capability_unavailable": (
+        True,
+        ["无法从本机 Origin 安装提取能力表（未找到 oPlotIDs.h）",
+         "确认 Origin 安装完整；或用 origin_status 查内建能力清单"],
+    ),
 }
 
 VALID_CODES = frozenset(CODE_META)
@@ -330,6 +348,24 @@ RECOVERY_MAP: Dict[str, Dict[str, Any]] = {
         "policy": RECOVERY_POLICY_NO,
         "diagnose": ["检查 DSH_ORIGIN_ALLOWED_ROOTS 白名单设置",
                      "把文件移入允许目录或请用户扩白名单"],
+    },
+    "template_exists": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["换模板名，或确认覆盖后传 overwrite=true"],
+    },
+    "template_not_found": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["origin_template_list 查可用模板名",
+                     "origin_template_save 先从成品图存一个"],
+    },
+    "no_style_snapshot": {
+        "policy": RECOVERY_POLICY_FIX,
+        "diagnose": ["该模板无可套用样式；用 origin_template_save 重新存快照"],
+    },
+    "capability_unavailable": {
+        "policy": RECOVERY_POLICY_REPLAN,
+        "diagnose": ["origin_diagnose 确认 Origin 安装与路径",
+                     "origin_status 查内建能力清单作为替代"],
     },
 }
 

@@ -1,0 +1,121 @@
+# 快速上手（小白版）
+
+> 不知道该选哪种？**看下面这张表，30 秒决定**。
+> 想直接了解全部功能，看主文档 [README.md](README.md)。
+
+## 先选一种用法
+
+| 你是谁 | 推荐方式 | 要装什么 | 大概几分钟 |
+|---|---|---|---|
+| 我只想点一下就能用，别让我配环境 | **方式一：Origin 里点按钮** | 一个 App 文件 | 3 分钟 |
+| 我没有 AI 客户端，但想让 AI 帮我写脚本 | **方式二：复制脚本粘进 Origin** | **什么都不用装** | 1 分钟 |
+| 我有 Cursor / Claude Desktop / Kimi Code 等 | **方式三：一键接入 MCP** | 一条命令 | 2 分钟 |
+| 我用 DSH（DeepSeek Harness） | **方式四：DSH 内原生** | 插件市场安装 | 1 分钟 |
+
+**都要有**：Windows + 已安装并能正常打开的正版 Origin（2021 及以上，2026 实测）。
+
+---
+
+## 方式一：Origin 里点按钮（最省力）
+
+适合：不想碰命令行、不想配 Python 的人。
+
+1. 生成 App 文件夹：
+   ```
+   python scripts/build_origin_app.py
+   ```
+2. 它会在屏幕上打印三行命令，照着做：
+   - 把生成的 `DSHOriginBridge` 文件夹复制到 `%LOCALAPPDATA%\OriginLab\Apps`
+   - 在 Origin 的 **Command Window** 里跑那条 `mkOPX ...` 命令（**必须是反斜杠路径**，正斜杠会卡住）
+   - 把生成的 `.opx` 文件拖进 Origin 窗口
+3. 在 Origin 的 **Apps Gallery** 里会出现 **DSHOriginBridge** 按钮——**点一下启动，再点一下停止**。
+4. 启动后，你的 AI 客户端（Cursor / Claude Desktop 等）就能连上这个 Origin 了。
+
+> ⚠️ 别把文件夹直接拖进 Apps Gallery——Origin 会显示"接受"但**什么都不会发生**（实测过的坑）。必须走 `mkOPX` 打包。
+
+---
+
+## 方式二：复制脚本粘进 Origin（零安装）
+
+适合：**任何 AI 都能用**——哪怕这个 AI 完全不支持插件。
+
+1. 把 Skill 文件 `skills/origin-scripting/SKILL.md` 的内容发给 AI（或让 AI 读这个文件）。
+2. 对它说：「帮我生成一段 Origin 脚本，画 x/y 的折线图并导出 PNG」。
+3. 把 AI 给出的脚本复制，粘贴到 Origin 的 **Script Window**（或 Python Console）里运行。
+
+**优点**：不需要装 MCP、不需要配 Python 环境、不需要市场账号。
+**注意**：脚本里的路径、列名要按你自己的数据改（SKILL 里的模板都标注了"改哪几行"）。
+
+---
+
+## 方式三：一键接入 MCP 客户端
+
+适合：Cursor / Claude Desktop / Kimi Code / Cline / Continue / VS Code 等支持 MCP 的客户端。
+
+**A. 自动写配置（推荐）**
+```
+python install.py
+```
+它会自动找到你装过的客户端并把配置写进去，重启客户端即可。
+
+**B. 手动配置**
+```json
+{
+  "mcpServers": {
+    "dsh-origin": {
+      "command": "你的python绝对路径",
+      "args": ["项目绝对路径/origin_mcp_stdio.py"]
+    }
+  }
+}
+```
+不知道自己的 Python 路径？跑 `python origin_mcp_stdio.py --print-config`，它会把每个客户端该填什么直接打印出来。
+
+**C. 用 npx 直接拉起**
+```
+npx dsh-origin-plugin
+```
+
+**D. 多个 AI 同时连同一个 Origin**（HTTP 模式）
+```
+python origin_mcp_http.py --port 8731
+```
+客户端填 `"url": "http://127.0.0.1:8731/mcp"`。可用 `DSH_ORIGIN_HTTP_TOKEN` 设口令。
+
+---
+
+## 方式四：DSH（DeepSeek Harness）内原生
+
+在 DSH Desktop 的**插件市场**里搜 `dsh-origin`（来源选 1024Store 或 dshfind），点安装即可——装完 DSH 里的 AI 直接就能用，不用任何配置。
+
+---
+
+## 第一次出图（复制这段给你的 AI）
+
+> 用 Origin 画一张图：x = 1,2,3,4,5，y = 1,4,9,16,25，期刊风格，导出 PNG。
+
+插件内部会走 **`origin_figure`**——一次调用完成 写数据 → 画图 → 验证 → 导出（约 1 秒），
+而不需要 AI 来回调用七八次工具。这也是本插件**提速的主路径**。
+
+想自己调细节（换颜色、改轴、挪图例、加误差棒），再说一句就行，AI 会用细粒度工具改。
+
+---
+
+## 常见问题
+
+| 现象 | 怎么办 |
+|---|---|
+| 连不上 Origin | 先让 AI 调 `origin_diagnose`（检查安装 / COM 注册 / 残留进程 / 导出目录权限）。Origin 没开时插件会自动拉起它 |
+| 中文路径/中文列名乱码 | 已内置处理（编码自动探测）。若仍异常，把文件移到纯英文路径再试 |
+| 感觉慢 | ①让 AI 用 `origin_figure` 一次画完 ②先跑 `origin_warmup` 预热 ③项目里图页太多（>200）时跑 `origin_pages_gc`——实测 793 页会让某些操作慢 30 倍 |
+| Origin 卡在弹窗 | 插件有看门狗会自动点掉；真卡死时手动关掉对话框重试 |
+| AI 说某个功能不支持 | 是**真实的**不支持，不是它不会用。完整清单见 [COMPATIBILITY.md](COMPATIBILITY.md)（15 条实测过的失败场景） |
+
+---
+
+## 下一步
+
+- 全部能力与工具清单：[README.md](README.md)
+- 英文说明：[README.en.md](README.en.md)
+- 已知限制与替代方案：[COMPATIBILITY.md](COMPATIBILITY.md)
+- 版本历史：[CHANGELOG.md](CHANGELOG.md)

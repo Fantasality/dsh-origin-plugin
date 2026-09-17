@@ -93,6 +93,15 @@ TOOL_CATALOG = [
     {"name": "origin_import_matplotlib", "group": "数据", "desc": "导入 matplotlib Figure pickle（提取曲线数据与颜色/线宽/符号映射）"},
     {"name": "origin_export_pptx", "group": "交付与验证", "desc": "图导出高清 PNG 并组 PowerPoint 页（面板字母+来源注记，论文组图）"},
     {"name": "origin_template_search", "group": "连接与诊断", "desc": "搜索/下载 OriginLab Graph Gallery 官方模板（.zip，页面结构变化时如实报告）"},
+    # 阶段 A/B/C（2026-09-17）
+    {"name": "origin_figure", "group": "画图", "desc": "端到端一张图（一次调用完成 写数/导入→画图→验证→导出→交付；提速主路径）"},
+    {"name": "origin_warmup", "group": "连接与诊断", "desc": "预热 Origin 连接（把冷启动挪出用户视野）"},
+    {"name": "origin_pages_gc", "group": "细粒度编辑", "desc": "页堆积治理（超阈值报告/清理；实测 793 页让枚举慢 30 倍）"},
+    {"name": "origin_template_save", "group": "交付与验证", "desc": "把成品图存为可复用模板（样式快照+opju 备份，课题组统一风格）"},
+    {"name": "origin_template_list", "group": "交付与验证", "desc": "列出可用模板/样式快照（离线秒回）"},
+    {"name": "origin_template_apply", "group": "交付与验证", "desc": "把模板样式套到指定图（逐项 status 回报）"},
+    {"name": "origin_capabilities", "group": "连接与诊断", "desc": "从本机 Origin 安装 oPlotIDs.h 提取真实图型能力表"},
+    {"name": "origin_capability_diff", "group": "连接与诊断", "desc": "能力表 vs 引擎硬编码图型表的差异（暴露文档/实现脱节）"},
     # plot / export
     {"name": "origin_plot", "group": "画图", "desc": "基于工作表画图（含 histogram/box/bar，可传 style_mode/family/style_overrides）"},
     {"name": "origin_plot_file", "group": "画图", "desc": "一键 写数+画图+导出（最常用）"},
@@ -498,6 +507,96 @@ def origin_template_search(keyword: str, max_items: int = 5,
     """
     return engine.template_search(keyword, max_items=max_items,
                                   download_dir=download_dir or None)
+
+
+# ---------------------------------------------------------------------------
+# 阶段 A/B/C（2026-09-17）：端到端提速 + 模板资产 + 能力表
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def origin_figure(columns: dict = None, data_source: str = "",
+                  intent: str = "auto", plot_type: str = "",
+                  x_column: str = "", y_columns: list = None,
+                  style_mode: str = "default", family: str = "",
+                  fmt: str = "png", file_path: str = "", output_dir: str = "",
+                  width: int = 1200, graph_name: str = "", title: str = "",
+                  verify: bool = True, deliver: bool = False,
+                  source_path: str = "") -> dict:
+    """端到端一张图：一次调用完成 导入/写数 → 画图 →（可选）验证 → 导出 →（可选）交付。
+
+    这是**提速主路径**——把常用流程从 6-10 次工具调用收敛为 1 次（性能分析：
+    感知耗时的 80% 在模型决策轮次，不在 Origin 执行）。
+
+    Args:
+        columns: 内联数据 dict{列名: [值...]}（与 origin_write_data 同语义）。
+        data_source: 本地 CSV/XLSX 路径（优先于 columns）。
+        intent: auto | journal（期刊单栏）| presentation | quick（800px 快速预览）。
+        verify: 是否跑一次 origin_verify_graph（默认 True）。
+        deliver: 是否额外做一键交付目录（图片+OPJU+csv+报告）。
+    返回：graph / file / steps（逐步耗时 ms）/ proof_level（verified|readback_only|unverified）。
+    """
+    return engine.figure(columns=columns, data_source=data_source or None,
+                         intent=intent, plot_type=plot_type or None,
+                         x_column=x_column or None, y_columns=y_columns,
+                         style_mode=style_mode, family=family or None,
+                         fmt=fmt, file_path=file_path or None,
+                         output_dir=output_dir or None, width=width,
+                         graph_name=graph_name or None, title=title or None,
+                         verify=verify, deliver=deliver,
+                         source_path=source_path or None)
+
+
+@mcp.tool()
+def origin_warmup(start_origin: bool = True) -> dict:
+    """预热 Origin 连接（把冷启动成本挪到用户不感知的时刻）。"""
+    return engine.warmup(start_origin=start_origin)
+
+
+@mcp.tool()
+def origin_pages_gc(threshold: int = 200, dry_run: bool = True) -> dict:
+    """页堆积治理：项目页超阈值时报告（dry_run=true）或清理（false）。
+
+    实测：793 页时 list_pages 30.9s、单次 close 59.2s（险撞 90s 看门狗）。
+    """
+    return engine.pages_gc(threshold=threshold, dry_run=dry_run)
+
+
+@mcp.tool()
+def origin_template_save(graph: str, template_name: str, category: str = "",
+                         overwrite: bool = False) -> dict:
+    """把成品图存为可复用模板，供课题组统一风格后套用。
+
+    实现说明：Origin 的 .otpu 保存通道实测不可用（save -i/-t/-it 静默不落盘），
+    因此采用**样式快照**（JSON 侧车记录颜色/线宽/符号/轴/图例/页面几何）+ opju 备份。
+    """
+    return engine.template_save(graph, template_name, category=category or None,
+                                overwrite=overwrite)
+
+
+@mcp.tool()
+def origin_template_list(category: str = "") -> dict:
+    """列出可用模板/样式快照（离线秒回，不连 Origin）。"""
+    return engine.template_list(category=category or None)
+
+
+@mcp.tool()
+def origin_template_apply(graph: str, template_name: str) -> dict:
+    """把模板样式套到指定图（逐项返回 applied/readback_only/unverified）。"""
+    return engine.template_apply(graph, template_name)
+
+
+@mcp.tool()
+def origin_capabilities(force_refresh: bool = False) -> dict:
+    """从本机 Origin 安装的 oPlotIDs.h 提取真实图型能力表（非文档抄录）。
+
+    找不到头文件时如实返回 capability_unavailable，不伪造数据。
+    """
+    return engine.capabilities(force_refresh=force_refresh)
+
+
+@mcp.tool()
+def origin_capability_diff() -> dict:
+    """能力表 vs 引擎硬编码图型表的差异（暴露文档/实现脱节）。"""
+    return engine.capability_diff()
 
 
 @mcp.tool()

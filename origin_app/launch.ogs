@@ -1,0 +1,40 @@
+; ============================================================
+; launch.ogs —— DSH Origin Bridge 的按钮入口（Origin OGS 脚本）
+; ------------------------------------------------------------
+; 作用：用户在 Origin 的 Apps Gallery 点击 "DSH Origin Bridge" 按钮时，
+;       Origin 自动执行本文件的 [Main] 段。
+;       [Main] 做的事只有一个：调用同目录的 bridge_manager.py，
+;       由它去"启动 / 停止"一个脱离 Origin UI 线程的后台桥接进程（sidecar）。
+;
+; 设计点（参考竞品 erannave/originlab-mcp 的 sidecar 思路，但更易用）：
+;   - 真正拉起/杀死进程的逻辑全在 bridge_manager.py（纯 Python，可单测、
+;     可被 build_origin_app.py 的 --dry-run 自检引用），OGS 只负责"叫一声"。
+;   - toggle：桥接在跑就停，没跑就起，不用记两个按钮。
+;
+; 关于本 App 目录的取得：
+;   %@AD% 是 Origin 的 "App Directory" 宏，返回当前 App 所在目录。
+;   若该宏在你的 Origin 版本未解析（极少数老版本），请把下面第 18 行的
+;   %A 手动改成 App 实际路径，例如：
+;       string strApp$ = C:\Users\你\AppData\Local\OriginLab\Apps\DSHOriginBridge\;
+; ============================================================
+
+[Main]
+// 1) 取得本 App 所在目录（结尾带反斜杠）
+string strApp$ = %@AD%;
+
+// 2) 兜底：若宏没解析出路径（strApp$ 为空），给出可读提示，避免静默无效
+if (%(strApp$) == 0) {
+    type "DSH Origin Bridge：无法解析 App 目录宏 %@AD%。";
+    type "请直接打开 Origin 的 Command Window，手动执行：";
+    type "    run -pyf \"<App所在目录>\bridge_manager.py\" --toggle";
+    return 0;
+}
+
+// 3) 调用 bridge_manager.py 做 toggle（启/停切换），并把状态打到 Command Window
+//    --toggle：在跑则停止，没跑则启动。
+run -pyf "%(strApp$)bridge_manager.py" --toggle;
+
+// 4) 额外回显当前状态文件，方便新手确认到底起没起
+run -pyf "%(strApp$)bridge_manager.py" --status;
+
+return 0;

@@ -1,5 +1,52 @@
 # Changelog
 
+## 2.7.0 (2026-09-17)
+
+**战略评估后的阶段 A/B/C 全量实施**（70 工具 / 34 错误码）。
+
+### 阶段 A：提速（性能分析：80% 感知耗时在模型决策轮次）
+- **`origin_figure` 端到端**：一次调用完成 导入/写数 → 画图 →（可选）验证 → 导出 →
+  （可选）交付，返回逐步 `steps`、`timings.total_ms` 与汇总 `proof_level`。
+  实测 journal 全流程 ~1.2s（原路径需 6-10 次工具调用）。
+- `origin_warmup` 预热（295ms，把 Origin 冷启动挪出用户视野）。
+- `origin_pages_gc` 页堆积治理（实测 793 页让 `list_pages` 慢到 30.9s、`close` 59.2s）。
+- SKILL 主循环新增 **[0] 提速判断**：默认走 `origin_figure` 快路径，仅在细改/精修时进完整流程。
+
+### 阶段 B：入口形态（解决"进不了用户的手"）
+- **Origin App（.opx）**：`origin_app/`（App.ini + launch.ogs + bridge_manager.py）+
+  `scripts/build_origin_app.py` 一键生成并打印正确的 mkOPX 命令；Apps Gallery 点按钮启停。
+  **默认 HTTP transport**（stdio 不适合 detached 常驻——实测拉起即退出）。
+- **零安装脚本 Skill**：`skills/origin-scripting/SKILL.md`——AI 生成 Origin Python/LabTalk
+  脚本，用户粘进 Script Window 执行；零依赖、任何 agent 可用（竞品空白点）。
+- **HTTP transport**：`origin_mcp_http.py`（127.0.0.1:8731，`/mcp` + `/health` +
+  Bearer token），多 AI 客户端共享一个 Origin。
+- **模板资产**：`origin_template.py` save/list/apply。
+  **实测 `.otpu` 保存通道不可用**（`save -i/-t/-it` 静默不落盘、COM 无 SaveTemplate）
+  → 降级为 JSON 样式快照 + opju 备份，套用实测 47 项 applied，100% 可用。
+
+### 阶段 C：深度可信
+- `origin_capabilities`：从本机 `oPlotIDs.h` 提取真实图型表（**实测 116 条**），
+  `origin_capability_diff` 与硬编码表比对，暴露文档/实现脱节。
+- `origin_proof`：`proof_level` 三级（verified / readback_only / unverified），
+  落实"readback is never proof"，单测 17 项。
+- CI：`.github/workflows/ci.yml`（offline + pytest + SKILL 一致性 + proof 单测，多 Python 版本）。
+- 视觉基准：12 → **22 张**（新增四种调用方式 × 物化案例）。
+
+### 文档
+- 新增 **QUICKSTART.md**（小白版：4 种调用方式决策表 + 第一次出图 + 常见问题）。
+- 主 README 仅加一行 QUICKSTART 超链接；README.en.md 重写（70 工具能力清单 + 6 种安装路径）。
+
+### 修复
+- `bridge_manager`：默认 transport stdio → http；`do_status` 改用**端口探测**
+  （PID 探测对 detached 子进程会误判为已退出，实测进程在跑却报未运行）。
+
+### 验证
+四种调用方式 × 4 个大学物理化学案例（理想气体等温线族 / 朗伯-比尔标准曲线 /
+酸碱滴定曲线 / 阿伦尼乌斯图）全部通过：A App 形态 10/10、B 零安装脚本 4/4、
+C MCP 客户端 4/4（70 工具）、D npm 包内 1/1。
+回归：offline + pytest 15 + proof 17 + selftest + fine-edit + repro + chem v2 15/15
++ 视觉基准 22/22 + SKILL 一致性（三 SKILL 零幽灵）。
+
 ## 2.6.2 (2026-09-16)
 
 **npm 安装契约修复**（桌面市场可安装三道闸门）：

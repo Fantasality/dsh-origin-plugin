@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dsh-origin-plugin"
-version = "2.6.0"
+version = "2.7.0"
 description = "DSH Origin Plugin: drive Origin scientific plotting from AI chat via MCP (60 tools; works standalone via stdio)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -38,7 +38,8 @@ py-modules = [
     "origin_engine", "origin_edit", "origin_errors", "origin_fileio",
     "origin_analysis", "origin_verify", "origin_matrix", "origin_mcp_server",
     "origin_mcp_stdio", "origin_plan", "origin_bridge", "origin_spec",
-    "origin_gallery", "plot_style", "install",
+    "origin_gallery", "origin_e2e", "origin_mcp_http", "origin_template",
+    "origin_capabilities", "origin_proof", "plot_style", "install",
 ]
 include-package-data = true
 

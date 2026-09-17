@@ -5076,6 +5076,92 @@ def template_search(keyword, max_items=5, download_dir=None):
                            download_dir=download_dir)
 
 
+# --- 阶段 A/B/C（2026-09-17）：端到端提速 + 模板资产 + 能力表 + 证据分级 ---
+@_synchronized
+def figure(columns=None, data_source=None, intent="auto", plot_type=None,
+           x_column=None, y_columns=None, style_mode="default", family=None,
+           fmt="png", file_path=None, output_dir=None, width=1200,
+           graph_name=None, title=None, verify=True, deliver=False,
+           source_path=None):
+    """端到端一张图：导入/写数 → 画图 →（可选）verify → 导出 →（可选）交付。
+
+    把常用路径从 6-10 次工具调用收敛为 1 次（性能分析：感知耗时的 80% 在
+    模型决策轮次）。返回带 steps 逐步耗时与汇总 proof_level。
+    """
+    ok, conn = _connect_impl()
+    if not ok:
+        return conn
+    import origin_e2e as _e2e
+    import origin_proof as _pf
+    r = _e2e.figure_impl(_origin_app, columns=columns, data_source=data_source,
+                         intent=intent, plot_type=plot_type, x_column=x_column,
+                         y_columns=y_columns, style_mode=style_mode,
+                         family=family, fmt=fmt, file_path=file_path,
+                         output_dir=output_dir, width=width,
+                         graph_name=graph_name, title=title, verify=verify,
+                         deliver=deliver, source_path=source_path)
+    return _pf.annotate(r)
+
+
+@_synchronized
+def warmup(start_origin=True):
+    """预热：确保 Origin 已连并完成一次完整 COM 往返（把冷启动挪出用户视野）。"""
+    ok, conn = _connect_impl()
+    if not ok:
+        return conn
+    import origin_e2e as _e2e
+    return _e2e.warmup_impl(_origin_app, start_origin=start_origin)
+
+
+@_synchronized
+def pages_gc(threshold=200, dry_run=True):
+    """页堆积治理：项目页超阈值时报告/清理（实测 793 页让枚举慢 30 倍）。"""
+    ok, conn = _connect_impl()
+    if not ok:
+        return conn
+    import origin_e2e as _e2e
+    return _e2e.pages_gc_impl(_origin_app, threshold=threshold, dry_run=dry_run)
+
+
+@_synchronized
+def template_save(graph, template_name, category=None, overwrite=False):
+    """把成品图存为可复用模板（.otpu 通道实测不可用 → JSON 样式快照 + opju 备份）。"""
+    ok, conn = _connect_impl()
+    if not ok:
+        return conn
+    import origin_template as _ot
+    return _ot.template_save_impl(_origin_app, graph, template_name,
+                                  category=category, overwrite=overwrite)
+
+
+def template_list(category=None):
+    """列出可用模板/样式快照（离线，不连 Origin）。"""
+    import origin_template as _ot
+    return _ot.template_list_impl(None, category=category)
+
+
+@_synchronized
+def template_apply(graph, template_name):
+    """把模板样式套到指定图（逐项返回 applied/readback_only/unverified）。"""
+    ok, conn = _connect_impl()
+    if not ok:
+        return conn
+    import origin_template as _ot
+    return _ot.template_apply_impl(_origin_app, graph, template_name)
+
+
+def capabilities(force_refresh=False):
+    """从本机 Origin 安装的 oPlotIDs.h 提取真实图型能力表，并与硬编码表比对。"""
+    import origin_capabilities as _oc
+    return _oc.capabilities_impl(force_refresh=force_refresh)
+
+
+def capability_diff():
+    """能力表 vs 引擎硬编码 PLOT_TYPES 的差异（暴露文档/实现脱节）。"""
+    import origin_capabilities as _oc
+    return _oc.compare_against_hardcoded_impl()
+
+
 @_synchronized
 def help():
     return _help_impl()

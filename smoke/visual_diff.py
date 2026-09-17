@@ -27,6 +27,7 @@ BASELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 MANIFEST = os.path.join(BASELINE_DIR, "manifest.json")
 # 白名单：案例名 -> 产物文件名（视觉敏感的代表性图；其它产物变化不算）
 WATCHLIST = {
+    # 化学 v2 案例（15 个场景基线）
     "d01_raman": "d01_raman.png",
     "d05_tafel": "d05_tafel.png",
     "d06_eis": "d06_eis.png",
@@ -39,6 +40,17 @@ WATCHLIST = {
     "c23_multipanel": "c23.png",
     "c21_dualy": "c21.png",
     "c25_forest": "c25.png",
+    # 四种调用方式 × 大学物理化学案例（2026-09-17 新增）
+    "wayA_app_boyle": "A_boyle.png",
+    "wayB_script_boyle": "B_boyle.png",
+    "wayB_script_beer": "B_beer.png",
+    "wayB_script_titration": "B_titration.png",
+    "wayB_script_arrhenius": "B_arrhenius.png",
+    "wayC_mcp_boyle": "C_boyle.png",
+    "wayC_mcp_beer": "C_beer.png",
+    "wayC_mcp_titration": "C_titration.png",
+    "wayC_mcp_arrhenius": "C_arrhenius.png",
+    "wayD_pkg_arrhenius": "D_arrhenius.png",
 }
 THRESHOLD = 14  # 汉明距离阈值（64 bit dHash；实测同图重绘距离 0-6）
 
