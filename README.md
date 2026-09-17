@@ -3,7 +3,9 @@
 **国内可用 · DSH 生态 · MCP 桥接通用** —— 让 AI 对话直接驱动本机 **OriginLab Origin** 自动画图、分析、交付。
 纯本机 COM 通道：**数据不出本机、无外网依赖、秒级响应**（对比需要外网的远程 Origin 服务（如 EditaPlot 类），国内访问不稳定且数据要上传第三方；本插件用你已装的正版 Origin，没有网络与隐私问题）。
 
-> 🆕 **第一次用？先看 [快速上手（小白版）](QUICKSTART.md)** —— 4 种调用方式（Origin 里点按钮 / 复制脚本 / MCP 客户端 / DSH 内），挑一个适合你的，1-3 分钟跑通。
+> ## 🚀 [**👉 点这里：快速上手（小白版）· 4 种用法 1-3 分钟跑通 👈**](QUICKSTART.md)
+>
+> ### 😵 看不懂？把 [这个文件](skills/install-dsh-origin/SKILL.md) 发给你的 AI，说「按手册帮我装」就行。
 
 [English version here](README.en.md)
 

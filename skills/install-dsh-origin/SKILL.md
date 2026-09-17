@@ -71,40 +71,60 @@ python -c "import originpro; print('OK')"
 
 ## 第 3 步：写进用户的 AI 客户端配置
 
-先**探测用户装了哪些客户端**（存在就配置，不存在跳过）：
+### 3.1 先自动检测（推荐，覆盖 13 种客户端）
 
-| 客户端 | 配置文件 |
-|---|---|
-| Cursor | `%USERPROFILE%\.cursor\mcp.json` |
-| Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` |
-| Kimi Code | `%USERPROFILE%\.kimi\mcp.json`（或 `.kimi-code`） |
-| VS Code / Copilot | `%APPDATA%\Code\User\mcp.json` |
-| Cline | `%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json` |
-| Windsurf | `%USERPROFILE%\.codeium\windsurf\mcp_config.json` |
-| WorkBuddy | `%USERPROFILE%\.workbuddy\mcp.json` |
-
-往里面的 `mcpServers` 加（**文件不存在就新建**，内容是 `{"mcpServers":{}}` 再改）：
-
-```json
-{
-  "mcpServers": {
-    "dsh-origin": {
-      "command": "<PYTHON>",
-      "args": ["<PKG_DIR>\\origin_mcp_stdio.py"]
-    }
-  }
-}
-```
-
-- `<PYTHON>` 和 `<PKG_DIR>` 换成真实绝对路径
-- **路径里的反斜杠要转义成 `\\`**（JSON 语法）
-- 已经配了别的 server 就**合并进去**，不要覆盖整个文件
-
-**更省事的办法**：直接跑插件自带的一键配置脚本，它会自动找客户端并写入：
 ```bash
 cd <PKG_DIR>
-python install.py
+python install.py            # 自动找客户端并写入配置（含备份）
+python install.py --list     # 只看检测到哪些，不写入
 ```
+
+支持：Claude Desktop / Cursor / Windsurf / Cline / VS Code(Copilot) / WorkBuddy /
+Kimi Code / Gemini CLI / Trae / Zed / Continue / Codex CLI —— 结构不同的
+（Continue 用数组、Zed 用嵌套对象、Codex 用 TOML）脚本会分别处理。
+
+### 3.2 如果脚本一个都没检测到（**兜底流程，务必执行**）
+
+**不要就此收工，也不要瞎猜配置文件位置。按顺序做：**
+
+1. **直接问用户**（这是最可靠的一步）：
+   > "你的 AI 客户端叫什么名字？（比如 Cursor / Claude Desktop / Codex / 通义灵码 /
+   > 豆包 / 公司自研的 XX —— 有名字我就能找到它的配置文件；不确定的话，
+   > 在客户端设置里找 'MCP' 或 '模型上下文协议' 字样）"
+2. 用户答不上来时，**列出候选让用户指认**：
+   > "是不是下面这些之一：Cursor、Claude Desktop、VS Code、Cline、Windsurf、
+   > Kimi Code、Gemini CLI、Codex、Trae、Zed、Continue、WorkBuddy？"
+3. **都没有 / 是自研客户端** → 给用户通用片段，让他粘到客户端的 MCP 设置里：
+   ```json
+   {"mcpServers": {"dsh-origin": {"command": "<PYTHON>", "args": ["<PKG_DIR>\\origin_mcp_stdio.py"]}}}
+   ```
+   并告诉他："在客户端里搜 'MCP' 或 '添加服务器'，把这段填进去。"
+4. **完全找不到入口** → 让用户在客户端里直接说：
+   > "请帮我把这个 MCP 服务器加进你的配置：命令是 <PYTHON>，参数是 <PKG_DIR>\origin_mcp_stdio.py，名字叫 dsh-origin"
+   多数客户端能自己完成。
+
+### 3.3 各客户端配置文件速查（兜底时用）
+
+| 客户端 | 配置文件 | 结构 |
+|---|---|---|
+| Claude Desktop | `%APPDATA%\Claude\claude_desktop_config.json` | `mcpServers` |
+| Cursor | `%USERPROFILE%\.cursor\mcp.json` | `mcpServers` |
+| VS Code / Copilot | `%APPDATA%\Code\User\mcp.json` | `mcpServers` |
+| Cline | `%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json` | `mcpServers` |
+| Windsurf | `%USERPROFILE%\.codeium\windsurf\mcp_config.json` | `mcpServers` |
+| WorkBuddy | `%USERPROFILE%\.workbuddy\mcp.json` | `mcpServers` |
+| Kimi Code | `%USERPROFILE%\.kimi-code\mcp.json` | `mcpServers` |
+| Gemini CLI | `%USERPROFILE%\.gemini\settings.json` | `mcpServers` |
+| Trae | `%USERPROFILE%\.trae\mcp.json` | `mcpServers` |
+| Zed | `%APPDATA%\Zed\settings.json` | `context_servers.<名字>.command = {path, args}` |
+| Continue | `%USERPROFILE%\.continue\config.json` | `experimental.modelContextProtocolServers`（数组） |
+| Codex CLI | `%USERPROFILE%\.codex\config.toml` | TOML：`[mcp_servers.dsh-origin]` 段 |
+| **DSH（DeepSeek Harness）** | **不走 mcp.json** | 用插件市场搜 `dsh-origin`；或读本仓库 SKILL |
+
+写入注意：
+- **路径里的反斜杠要转义成 `\\`**（JSON 语法）
+- 已配了别的 server 就**合并**，不要覆盖整个文件（先备份）
+- Codex 的 TOML 是**追加**一段，不要重写整个文件
 
 ---
 

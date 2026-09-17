@@ -1,16 +1,29 @@
 # 快速上手（小白版）
 
-> 不知道该选哪种？**看下面这张表，30 秒决定**。
-> 想直接了解全部功能，看主文档 [README.md](README.md)。
+> ## 😵 看不懂下面的任何一段话？
+> **直接跳到「方式三 · 让 AI 帮你装」**——把那个文件发给你的 AI，说一句话，剩下的它全包。
+> 这是最省事的路，也是我们最推荐新手走的路。
+
+> ## 🧩 一个所有方式的前提
+> **先把项目拿到本地**（术语叫"克隆"，就一条命令）：
+> ```
+> git clone https://github.com/Fantasality/dsh-origin-plugin.git
+> ```
+> 没装 git 的话，也可以直接下载压缩包解压：
+> https://github.com/Fantasality/dsh-origin-plugin/archive/refs/tags/v2.7.0.zip
+> （国内下载慢就用加速：把网址开头换成 `ghproxy.com/`）
+>
+> 拿到之后，你会有一个叫 `dsh-origin-plugin` 的文件夹——下面方式一、方式四都要用它。
 
 ## 先选一种用法
 
 | 你是谁 | 推荐方式 | 要装什么 | 大概几分钟 |
 |---|---|---|---|
-| 我只想点一下就能用，别让我配环境 | **方式一：Origin 里点按钮** | 一个 App 文件 | 3 分钟 |
+| 我完全不懂技术，只想能用 | **方式三：让 AI 帮你装** ⭐最推荐 | 什么都不用装 | 1 分钟 |
+| 我只想点一下就能用 | **方式一：Origin 里点按钮**（需先克隆项目） | 一个 App 文件 | 3 分钟 |
 | 我没有 AI 客户端，但想让 AI 帮我写脚本 | **方式二：复制脚本粘进 Origin** | **什么都不用装** | 1 分钟 |
 | 我有 Cursor / Claude Desktop / Kimi Code 等 | **方式三：一键接入 MCP** | 一条命令 | 2 分钟 |
-| 我用 DSH（DeepSeek Harness） | **方式四：DSH 内原生** | 插件市场安装 | 1 分钟 |
+| 我用 DSH（DeepSeek Harness） | **方式四：DSH 市场安装**（需先克隆项目才能自己搭） | 插件市场安装 | 1 分钟 |
 
 **都要有**：Windows + 已安装并能正常打开的正版 Origin（2021 及以上，2026 实测）。
 
@@ -18,12 +31,16 @@
 
 ## 方式一：Origin 里点按钮（最省力）
 
+> ⚠️ **这个方式需要先完成上面的「克隆项目」步骤**——App 文件在项目文件夹里的 `origin_app/` 目录，不在网上。
+
 适合：不想碰命令行、不想配 Python 的人。
 
-1. 生成 App 文件夹：
+1. 打开你克隆下来的 `dsh-origin-plugin` 文件夹，在**命令行**里执行：
    ```
+   cd dsh-origin-plugin
    python scripts/build_origin_app.py
    ```
+   （不会开命令行？→ 别折腾了，**用方式三让 AI 帮你做**）
 2. 它会在屏幕上打印三行命令，照着做：
    - 把生成的 `DSHOriginBridge` 文件夹复制到 `%LOCALAPPDATA%\OriginLab\Apps`
    - 在 Origin 的 **Command Window** 里跑那条 `mkOPX ...` 命令（**必须是反斜杠路径**，正斜杠会卡住）
@@ -37,7 +54,7 @@
 
 ## 方式二：复制脚本粘进 Origin（零安装）
 
-适合：**任何 AI 都能用**——哪怕这个 AI 完全不支持插件。
+适合：**任何 AI 都能用**——哪怕这个 AI 完全不支持插件。**不需要克隆项目。**
 
 1. 把 Skill 文件 `skills/origin-scripting/SKILL.md` 的内容发给 AI（或让 AI 读这个文件）。
 2. 对它说：「帮我生成一段 Origin 脚本，画 x/y 的折线图并导出 PNG」。
@@ -48,53 +65,44 @@
 
 ---
 
-## 方式三：一键接入 MCP 客户端
+## 方式三：让 AI 帮你装 ⭐ 新手最推荐
 
-适合：Cursor / Claude Desktop / Kimi Code / Cline / Continue / VS Code / WorkBuddy 等支持 MCP 的客户端。
+**不管什么情况，这条路都能走通。**
 
-**A. 让 AI 帮你装（最省事，推荐）**
+1. 打开这个文件：[`skills/install-dsh-origin/SKILL.md`](skills/install-dsh-origin/SKILL.md)
+2. **把整个文件的内容复制**，发给你正在用的 AI（WorkBuddy、Cursor、ChatGPT、豆包、随便什么）
+3. 附上一句话：
+   > **按这个手册帮我把 dsh-origin-plugin 装好并验证可用。**
+4. 它会：检查你的电脑环境 → 找 Python → 找到你的客户端配置文件 → 写好 → 让你重启客户端 → 再验证一次
 
-把 [`skills/install-dsh-origin/SKILL.md`](skills/install-dsh-origin/SKILL.md) 这个文件**发给任意 AI**（贴内容、或让它读这个文件），对它说：
+**如果它问你"你用的是哪个客户端"**，就照实说（比如"用 WorkBuddy"或"用 Cursor"）——手册里有如何应对"不认识你那个客户端"的兜底流程。
 
-> 按这个手册帮我把 dsh-origin-plugin 装好并验证可用。
+装完验证：在 AI 里说一句「调用 origin_status」，回复里有 `connected: true` 就成了。
 
-它会替你检查环境、找 Python、写客户端配置、重启后验证——你什么都不用懂。
+**其它接入方式（懂点技术再看）**：
 
-**B. 自动写配置**
-```
-python install.py
-```
-它会自动找到你装过的客户端并把配置写进去，重启客户端即可。
-
-**B. 手动配置**
-```json
-{
-  "mcpServers": {
-    "dsh-origin": {
-      "command": "你的python绝对路径",
-      "args": ["项目绝对路径/origin_mcp_stdio.py"]
-    }
-  }
-}
-```
-不知道自己的 Python 路径？跑 `python origin_mcp_stdio.py --print-config`，它会把每个客户端该填什么直接打印出来。
-
-**C. 用 npx 直接拉起**
-```
-npx dsh-origin-plugin
-```
-
-**D. 多个 AI 同时连同一个 Origin**（HTTP 模式）
-```
-python origin_mcp_http.py --port 8731
-```
-客户端填 `"url": "http://127.0.0.1:8731/mcp"`。可用 `DSH_ORIGIN_HTTP_TOKEN` 设口令。
+- **自动写配置**：`python install.py`（会扫描 13 种常见客户端并写入，带备份）
+- **手动配置**：
+  ```json
+  {"mcpServers": {"dsh-origin": {"command": "你的python绝对路径", "args": ["项目绝对路径/origin_mcp_stdio.py"]}}}
+  ```
+- **看该填什么**：`python origin_mcp_stdio.py --print-config`
+- **npx 直接拉起**：`npx dsh-origin-plugin`
+- **多个 AI 共用一个 Origin**（HTTP 模式）：
+  ```
+  python origin_mcp_http.py --port 8731
+  ```
+  客户端填 `"url": "http://127.0.0.1:8731/mcp"`；可用 `DSH_ORIGIN_HTTP_TOKEN` 设口令。
 
 ---
 
 ## 方式四：DSH（DeepSeek Harness）内原生
 
-在 DSH Desktop 的**插件市场**里搜 `dsh-origin`（来源选 1024Store 或 dshfind），点安装即可——装完 DSH 里的 AI 直接就能用，不用任何配置。
+> **两条路**：
+> - **想直接用** → 在 DSH Desktop 的**插件市场**里搜 `dsh-origin`（来源选 1024Store 或 dshfind），点安装。**这条路不需要克隆项目。**
+> - **想自己搭/改代码** → 先按前面的「克隆项目」做，再参考项目里的 `cordis.patch.yml`。
+>
+> ⚠️ 市场里的版本号可能滞后（比如显示 2.2.1）。想用最新版就用方式三里那条 npm 命令指定版本装。
 
 ---
 
