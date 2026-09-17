@@ -60,7 +60,9 @@
     "origin_proof.py",
     "QUICKSTART.md",
     "origin_app",
-    "scripts"
+    "scripts",
+    "AGENTS.md",
+    "START-HERE.md"
   ],
   "keywords": [
     "dsh",

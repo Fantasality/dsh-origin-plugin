@@ -8,6 +8,15 @@ description: 帮用户把 dsh-origin-plugin（AI 驱动 OriginLab Origin 画图�
 > 你是被用户请来干活的 AI。**按下面的顺序做，不要跳步，不要凭印象改路径**。
 > 目标：装完后用户说一句"用 Origin 画 x/y 折线图"，你就能真的画出图并导出文件。
 
+## 这次安装要装**两部分**（只看 MCP 就漏了一半）
+
+| 部分 | 内容 | 漏了会怎样 |
+|---|---|---|
+| **① MCP 服务** | 把 `origin_mcp_stdio.py` 写进客户端配置 → 你获得 70 个 Origin 工具 | 你根本没有工具可用 |
+| **② 项目 Skill**（第 4 步，**必须做**） | 让 AI 读到 `skills/origin-plotting/SKILL.md` 等文件 → 你获得"怎么用才对"的纪律：写后必读回、不虚构数据、歧义先问用户、避开静默失败通道 | **有工具但用得不对**：图不可信、反复踩坑、用户还得自己纠错 |
+
+**两部分都做完才算装完。** 第 4 步不要跳。
+
 ---
 
 ## 第 0 步：先判断能不能装（30 秒）
@@ -171,7 +180,81 @@ Kimi Code / Gemini CLI / Trae / Zed / Continue / Codex CLI —— 结构不同�
 
 ---
 
-## 第 4 步：验证（必须做，别跳过）
+## 第 4 步：**把项目的 Skill 也装进去**（重要，别只装 MCP！）
+
+> ⚠️ **这一步不是可选项。** 只装 MCP = 只给了 AI 工具清单，没给它"怎么用"。
+> 结果就是 AI 会用 `origin_plot` 但不知道项目纪律（写后必须读回、不虚构数据、
+> 歧义要先问用户、通道静默失败要避开），画出来的图不可信、还会重复踩坑。
+
+### 4.1 要装的两类东西
+
+**A. 知识文件（必须让 AI 读到）** —— 都在 `<PKG_DIR>` 里：
+
+| 文件 | 作用 | 优先级 |
+|---|---|---|
+| `skills/origin-plotting/SKILL.md` | 画图主流程 + 7 条铁律（写后读回、不虚构数据、改图前必 inspect…） | **必装** |
+| `COMPATIBILITY.md` | 15 条实测失败场景（3D 轴标题写不进、heatmap 静默失败、图例坐标陷阱…） | **必装** |
+| `skills/origin-stats/SKILL.md` | 统计检验流程与置信度说明 | 建议 |
+| `skills/origin-scripting/SKILL.md` | 零安装脚本模式（生成脚本给用户自己跑） | 建议 |
+| `QUICKSTART.md` / `README.md` | 用法与全部能力清单 | 可选 |
+| `docs/`（FigureSpec 等） | 声明式复现协议的细节 | 可选 |
+
+**B. 装的位置** —— 按客户端能力分三层，**从第 1 层开始试，不行往下降**：
+
+#### 第 1 层：客户端有原生 Skill / 规则目录（最好）
+
+把每个 `SKILL.md` 按 **`<目录>/<技能名>/SKILL.md`** 的形态复制过去：
+
+| 客户端 | Skill 目录 |
+|---|---|
+| **WorkBuddy** | 用户级 `%USERPROFILE%\.workbuddy\skills\<名字>\SKILL.md`；项目级 `<项目>\.workbuddy\skills\<名字>\SKILL.md` |
+| **Claude Code / Claude Desktop（Skills 功能）** | `%USERPROFILE%\.claude\skills\<名字>\SKILL.md` |
+| **DSH** | 用插件市场装（自带 skills/），或让 AI 读插件安装目录下的 `skills/` |
+| Cursor | 项目内 `.cursor\rules\` 放 `.mdc`（可把 SKILL 正文粘进去） |
+| VS Code / Copilot | 项目内 `.github\copilot-instructions.md` |
+| 各家通用 | 项目根已有现成的 **`AGENTS.md`**（本项目为 AI 写好的总入口：纪律 + 文件地图 + 工具速览）。<br>让用户**用客户端打开这个项目文件夹**（或把它加为工作目录），多数客户端会自动读它 |
+
+具体命令（PowerShell 示例，复制 4 个 skill 到 WorkBuddy 用户级）：
+```powershell
+$src = "<PKG_DIR>\skills"
+$dst = "$env:USERPROFILE\.workbuddy\skills"
+New-Item -ItemType Directory -Force -Path $dst | Out-Null
+Get-ChildItem $src -Directory | ForEach-Object {
+  $t = Join-Path $dst $_.Name
+  New-Item -ItemType Directory -Force -Path $t | Out-Null
+  Copy-Item (Join-Path $_.FullName "SKILL.md") $t -Force
+}
+Copy-Item "<PKG_DIR>\COMPATIBILITY.md" $dst -Force   # 踩坑清单也放进去
+```
+
+#### 第 2 层：支持"自定义指令 / 系统提示词 / 助手人设"（次好）
+
+把 **`skills/origin-plotting/SKILL.md` 的正文**（连同 7 条铁律）粘进客户端的
+自定义指令框 / 助手提示词 / 人设配置里；再把 `COMPATIBILITY.md` 的关键几行一起贴上。
+适用：Cherry Studio（助手 → 提示词）、豆包（智能体 / 自定义提示词）、
+各种 Web 端客户端的"系统提示词"入口。
+
+#### 第 3 层：什么都没有（兜底，也要做）
+
+**别放弃**——项目文件夹留在本地，然后告诉用户：
+
+> "以后每次开新对话，第一句话就说：
+> **先读 `<PKG_DIR>\skills\origin-plotting\SKILL.md` 和 `COMPATIBILITY.md`，再开始。**"
+
+或者把这两个文件内容**直接粘贴在对话开头**发给 AI。
+
+### 4.2 装完自检（别自己宣布成功）
+
+问 AI 一句：**「你读过本项目的纪律了吗？说说写图之后必须做什么、哪些操作会静默失败？」**
+
+- 答得出"写后必须读回 / 不虚构数据 / 3D 轴标题与 heatmap 静默失败"→ **装进去了** ✅
+- 答"不知道" → 回到 4.1 降层或换方式重装
+
+**只有 MCP 装好 + Skill 读到，才算真的装完。**
+
+---
+
+## 第 5 步：验证（必须做，别跳过）
 
 1. 让用户**完全退出并重启** AI 客户端（改配置必须重启才生效）
 2. 让用户在对话里说一句：「调用 origin_status」
@@ -186,7 +269,7 @@ python origin_mcp_server.py --offline-test  # 引擎自检（不连 Origin）
 
 ---
 
-## 第 5 步：排障（按现象查表）
+## 第 6 步：排障（按现象查表）
 
 | 现象 | 原因与处理 |
 |---|---|
@@ -202,12 +285,18 @@ python origin_mcp_server.py --offline-test  # 引擎自检（不连 Origin）
 
 ## 完工检查清单
 
+**MCP 部分**
 - [ ] Windows + 正版 Origin 2021+
 - [ ] Python 3.10+，`import originpro` 通过
 - [ ] 客户端配置里有 `dsh-origin`，路径是绝对路径且已转义
 - [ ] 客户端重启后能看到工具
 - [ ] `origin_status` 返回 `connected: true`
 - [ ] 说一句"用 Origin 画 x/y 折线图并导出 PNG"，能出图并给出文件路径
+
+**Skill 部分（别漏，缺了 AI 会用但用得不对）**
+- [ ] `skills/origin-plotting/SKILL.md` 已让 AI 读到（原生 skill 目录 / 自定义指令 / 对话开头粘贴，三者之一）
+- [ ] `COMPATIBILITY.md` 已让 AI 读到（避开 15 条实测坑）
+- [ ] 自检通过：问 AI"写图之后必须做什么、哪些操作会静默失败"，答得出「写后读回、3D 轴标题/heatmap 静默失败」等
 
 全部打勾就装好了。
 
