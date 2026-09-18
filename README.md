@@ -1,5 +1,32 @@
 # DSH Origin Plugin · AI 对话驱动 OriginLab Origin 科学绘图
 
+[![npm version](https://img.shields.io/npm/v/dsh-origin-plugin?style=flat-square)](https://www.npmjs.com/package/dsh-origin-plugin)
+[![npm downloads](https://img.shields.io/npm/dm/dsh-origin-plugin?style=flat-square&label=npm%20downloads)](https://www.npmjs.com/package/dsh-origin-plugin)
+[![GitHub release](https://img.shields.io/github/v/release/Fantasality/dsh-origin-plugin?style=flat-square)](https://github.com/Fantasality/dsh-origin-plugin/releases)
+[![GitHub downloads](https://img.shields.io/github/downloads/Fantasality/dsh-origin-plugin/total?style=flat-square&label=GitHub%20downloads)](https://github.com/Fantasality/dsh-origin-plugin/releases)
+[![GitHub stars](https://img.shields.io/github/stars/Fantasality/dsh-origin-plugin?style=flat-square)](https://github.com/Fantasality/dsh-origin-plugin/stargazers)
+[![tools](https://img.shields.io/badge/tools-74-blueviolet?style=flat-square)](README.md)
+[![error codes](https://img.shields.io/badge/error%20codes-35-blue?style=flat-square)](origin_errors.py)
+[![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078d6?style=flat-square)](README.md)
+[![Origin](https://img.shields.io/badge/Origin%2FOriginPro-2021%2B%20(2026%20tested)-ff9f1c?style=flat-square)](COMPATIBILITY.md)
+[![python](https://img.shields.io/badge/python-3.10%2B-3776ab?style=flat-square)](requirements.txt)
+[![license](https://img.shields.io/npm/l/dsh-origin-plugin?style=flat-square)](LICENSE)
+
+**下载与收录（国内直连，无需科学上网）**
+
+| 渠道 | 状态 |
+|---|---|
+| 🟢 **npm 官方源** | [dsh-origin-plugin](https://www.npmjs.com/package/dsh-origin-plugin) —— `npm i -g dsh-origin-plugin`（默认最新版） |
+| 🟢 **npmmirror 淘宝镜像** | [镜像页](https://npmmirror.com/package/dsh-origin-plugin) —— 国内加速，自动同步 |
+| 🟢 **GitHub Release** | [Releases](https://github.com/Fantasality/dsh-origin-plugin/releases) —— 源码 tgz + 说明 |
+| 🟢 **dshfind 目录源** | 已收录（`is_plugin=true`，市场内带安装命令） |
+| 🟢 **DSH 1024Store** | 已收录（DSH 桌面端市场来源） |
+| 🟢 **PyPI** | 包已构建于 `dist/`，token 到位即发布 |
+
+**适配**：Windows 10/11 · Origin/OriginPro 2021+（**2026 实测**）· Python 3.10+ ·
+13 种 MCP 客户端 + 豆包/Cherry Studio/通义灵码等 UI 型客户端 · **纯本机 COM 通道，
+数据不出本机、无外网依赖**。
+
 **国内可用 · DSH 生态 · MCP 桥接通用** —— 让 AI 对话直接驱动本机 **OriginLab Origin** 自动画图、分析、交付。
 纯本机 COM 通道：**数据不出本机、无外网依赖、秒级响应**（对比需要外网的远程 Origin 服务（如 EditaPlot 类），国内访问不稳定且数据要上传第三方；本插件用你已装的正版 Origin，没有网络与隐私问题）。
 

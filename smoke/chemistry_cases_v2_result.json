@@ -8,7 +8,7 @@
    "problems": [],
    "tool_calls": 3,
    "tool_ok": 3,
-   "seconds": 1.8
+   "seconds": 1.0
   },
   {
    "case": "d02_xps",
@@ -18,7 +18,7 @@
    "problems": [],
    "tool_calls": 4,
    "tool_ok": 4,
-   "seconds": 2.0
+   "seconds": 1.0
   },
   {
    "case": "d03_nmr",
@@ -28,7 +28,7 @@
    "problems": [],
    "tool_calls": 4,
    "tool_ok": 4,
-   "seconds": 4.0
+   "seconds": 1.3
   },
   {
    "case": "d04_combustion",
@@ -38,7 +38,7 @@
    "problems": [],
    "tool_calls": 8,
    "tool_ok": 8,
-   "seconds": 11.5
+   "seconds": 3.1
   },
   {
    "case": "d05_lsv_tafel",
@@ -48,33 +48,33 @@
    "problems": [],
    "tool_calls": 9,
    "tool_ok": 9,
-   "seconds": 6.7
+   "seconds": 2.3
   },
   {
    "case": "d06_eis",
    "desc": "EIS Nyquist 等轴比",
    "ok": true,
-   "summary": "graph=Graph8 verify=True",
+   "summary": "graph=Graph6 verify=True",
    "problems": [],
    "tool_calls": 2,
    "tool_ok": 2,
-   "seconds": 1.5
+   "seconds": 1.3
   },
   {
    "case": "d07_cv_multi",
    "desc": "CV 5 圈渐变叠放",
    "ok": true,
-   "summary": "graph=Graph9 legend=first_last verify=True",
+   "summary": "graph=Graph7 legend=first_last verify=True",
    "problems": [],
    "tool_calls": 2,
    "tool_ok": 2,
-   "seconds": 2.1
+   "seconds": 1.4
   },
   {
    "case": "d08_gcd",
    "desc": "充放电 3 圈叠放",
    "ok": true,
-   "summary": "graph=Graph10",
+   "summary": "graph=Graph8",
    "problems": [],
    "tool_calls": 1,
    "tool_ok": 1,
@@ -88,7 +88,7 @@
    "problems": [],
    "tool_calls": 2,
    "tool_ok": 2,
-   "seconds": 1.7
+   "seconds": 2.0
   },
   {
    "case": "d10_axis_ticks",
@@ -98,7 +98,7 @@
    "problems": [],
    "tool_calls": 5,
    "tool_ok": 5,
-   "seconds": 2.5
+   "seconds": 1.8
   },
   {
    "case": "d11_mask_cosmic",
@@ -118,7 +118,7 @@
    "problems": [],
    "tool_calls": 3,
    "tool_ok": 3,
-   "seconds": 8.8
+   "seconds": 4.3
   },
   {
    "case": "d13_threshold_line",
@@ -128,7 +128,7 @@
    "problems": [],
    "tool_calls": 4,
    "tool_ok": 4,
-   "seconds": 4.1
+   "seconds": 1.9
   },
   {
    "case": "d14_delivery",
@@ -138,7 +138,7 @@
    "problems": [],
    "tool_calls": 3,
    "tool_ok": 3,
-   "seconds": 3.3
+   "seconds": 1.8
   },
   {
    "case": "d15_labtalk",
@@ -148,309 +148,309 @@
    "problems": [],
    "tool_calls": 3,
    "tool_ok": 3,
-   "seconds": 2.2
+   "seconds": 1.0
   }
  ],
  "tool_log": [
   {
    "tool": "status",
    "ok": true,
-   "ms": 978
+   "ms": 776
   },
   {
    "tool": "write_data",
-   "ok": true,
-   "ms": 316
-  },
-  {
-   "tool": "peak_fit(3)",
-   "ok": true,
-   "ms": 1269
-  },
-  {
-   "tool": "export",
-   "ok": true,
-   "ms": 194
-  },
-  {
-   "tool": "write_data",
-   "ok": true,
-   "ms": 348
-  },
-  {
-   "tool": "peak_fit(3)",
-   "ok": true,
-   "ms": 1223
-  },
-  {
-   "tool": "edit_axis",
-   "ok": true,
-   "ms": 284
-  },
-  {
-   "tool": "export",
-   "ok": true,
-   "ms": 172
-  },
-  {
-   "tool": "write_data",
-   "ok": true,
-   "ms": 427
-  },
-  {
-   "tool": "peak_fit(4)",
-   "ok": true,
-   "ms": 2950
-  },
-  {
-   "tool": "edit_axis",
-   "ok": true,
-   "ms": 256
-  },
-  {
-   "tool": "export",
-   "ok": true,
-   "ms": 338
-  },
-  {
-   "tool": "write_data",
-   "ok": true,
-   "ms": 318
-  },
-  {
-   "tool": "peak_find",
-   "ok": true,
-   "ms": 160
-  },
-  {
-   "tool": "mask_points",
-   "ok": true,
-   "ms": 323
-  },
-  {
-   "tool": "fit(前基线)",
-   "ok": true,
-   "ms": 7737
-  },
-  {
-   "tool": "plot",
-   "ok": true,
-   "ms": 840
-  },
-  {
-   "tool": "add_line",
-   "ok": true,
-   "ms": 1058
-  },
-  {
-   "tool": "add_line",
-   "ok": true,
-   "ms": 834
-  },
-  {
-   "tool": "export",
-   "ok": true,
-   "ms": 246
-  },
-  {
-   "tool": "write_data",
-   "ok": true,
-   "ms": 456
-  },
-  {
-   "tool": "column_formula",
-   "ok": true,
-   "ms": 154
-  },
-  {
-   "tool": "mask_points",
    "ok": true,
    "ms": 272
   },
   {
-   "tool": "fit(Tafel)",
+   "tool": "peak_fit(3)",
    "ok": true,
-   "ms": 4316
-  },
-  {
-   "tool": "plot",
-   "ok": true,
-   "ms": 424
-  },
-  {
-   "tool": "add_line",
-   "ok": true,
-   "ms": 439
-  },
-  {
-   "tool": "edit_axis",
-   "ok": true,
-   "ms": 263
-  },
-  {
-   "tool": "edit_axis",
-   "ok": true,
-   "ms": 178
+   "ms": 544
   },
   {
    "tool": "export",
    "ok": true,
-   "ms": 214
-  },
-  {
-   "tool": "plot_template(eis_nyquist)",
-   "ok": true,
-   "ms": 1201
-  },
-  {
-   "tool": "verify_graph",
-   "ok": true,
-   "ms": 341
-  },
-  {
-   "tool": "plot_template(cycle_overlay)",
-   "ok": true,
-   "ms": 1813
-  },
-  {
-   "tool": "verify_graph",
-   "ok": true,
-   "ms": 312
-  },
-  {
-   "tool": "plot_template(cycle_overlay)",
-   "ok": true,
-   "ms": 1378
-  },
-  {
-   "tool": "plot3d",
-   "ok": true,
-   "ms": 940
-  },
-  {
-   "tool": "plot_contour",
-   "ok": true,
-   "ms": 785
-  },
-  {
-   "tool": "plot_file",
-   "ok": true,
-   "ms": 1340
-  },
-  {
-   "tool": "edit_axis",
-   "ok": true,
-   "ms": 303
-  },
-  {
-   "tool": "edit_axis",
-   "ok": true,
-   "ms": 228
-  },
-  {
-   "tool": "verify_graph",
-   "ok": true,
-   "ms": 391
-  },
-  {
-   "tool": "export",
-   "ok": true,
-   "ms": 238
+   "ms": 202
   },
   {
    "tool": "write_data",
    "ok": true,
-   "ms": 345
+   "ms": 202
   },
   {
-   "tool": "peak_find",
+   "tool": "peak_fit(3)",
    "ok": true,
-   "ms": 145
+   "ms": 584
   },
   {
-   "tool": "mask_points",
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 39
+  },
+  {
+   "tool": "export",
    "ok": true,
    "ms": 210
   },
   {
-   "tool": "plot",
+   "tool": "write_data",
    "ok": true,
-   "ms": 386
+   "ms": 211
   },
   {
-   "tool": "read_worksheet",
+   "tool": "peak_fit(4)",
    "ok": true,
-   "ms": 104
+   "ms": 860
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 25
   },
   {
    "tool": "export",
    "ok": true,
-   "ms": 186
+   "ms": 200
   },
   {
    "tool": "write_data",
    "ok": true,
-   "ms": 420
+   "ms": 214
   },
   {
-   "tool": "column_formula(ln)",
+   "tool": "peak_find",
    "ok": true,
-   "ms": 217
+   "ms": 17
   },
   {
-   "tool": "fit",
+   "tool": "mask_points",
    "ok": true,
-   "ms": 8123
+   "ms": 18
   },
   {
-   "tool": "write_data",
+   "tool": "fit(前基线)",
    "ok": true,
-   "ms": 561
+   "ms": 1941
   },
   {
-   "tool": "histogram",
+   "tool": "plot",
    "ok": true,
-   "ms": 2130
+   "ms": 258
   },
   {
    "tool": "add_line",
    "ok": true,
-   "ms": 1026
+   "ms": 260
+  },
+  {
+   "tool": "add_line",
+   "ok": true,
+   "ms": 189
   },
   {
    "tool": "export",
    "ok": true,
-   "ms": 385
+   "ms": 200
   },
   {
    "tool": "write_data",
    "ok": true,
-   "ms": 852
+   "ms": 169
+  },
+  {
+   "tool": "column_formula",
+   "ok": true,
+   "ms": 19
+  },
+  {
+   "tool": "mask_points",
+   "ok": true,
+   "ms": 29
+  },
+  {
+   "tool": "fit(Tafel)",
+   "ok": true,
+   "ms": 1139
   },
   {
    "tool": "plot",
    "ok": true,
-   "ms": 757
+   "ms": 289
   },
   {
-   "tool": "export_delivery",
+   "tool": "add_line",
    "ok": true,
-   "ms": 1677
+   "ms": 273
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 126
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 19
+  },
+  {
+   "tool": "export",
+   "ok": true,
+   "ms": 208
+  },
+  {
+   "tool": "plot_template(eis_nyquist)",
+   "ok": true,
+   "ms": 1126
+  },
+  {
+   "tool": "verify_graph",
+   "ok": true,
+   "ms": 134
+  },
+  {
+   "tool": "plot_template(cycle_overlay)",
+   "ok": true,
+   "ms": 1232
+  },
+  {
+   "tool": "verify_graph",
+   "ok": true,
+   "ms": 212
+  },
+  {
+   "tool": "plot_template(cycle_overlay)",
+   "ok": true,
+   "ms": 1367
+  },
+  {
+   "tool": "plot3d",
+   "ok": true,
+   "ms": 1015
+  },
+  {
+   "tool": "plot_contour",
+   "ok": true,
+   "ms": 1005
   },
   {
    "tool": "plot_file",
    "ok": true,
-   "ms": 1898
+   "ms": 1023
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 159
+  },
+  {
+   "tool": "edit_axis",
+   "ok": true,
+   "ms": 168
+  },
+  {
+   "tool": "verify_graph",
+   "ok": true,
+   "ms": 210
+  },
+  {
+   "tool": "export",
+   "ok": true,
+   "ms": 204
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 360
+  },
+  {
+   "tool": "peak_find",
+   "ok": true,
+   "ms": 123
+  },
+  {
+   "tool": "mask_points",
+   "ok": true,
+   "ms": 147
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 497
+  },
+  {
+   "tool": "read_worksheet",
+   "ok": true,
+   "ms": 86
+  },
+  {
+   "tool": "export",
+   "ok": true,
+   "ms": 211
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 327
+  },
+  {
+   "tool": "column_formula(ln)",
+   "ok": true,
+   "ms": 100
+  },
+  {
+   "tool": "fit",
+   "ok": true,
+   "ms": 3822
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 329
+  },
+  {
+   "tool": "histogram",
+   "ok": true,
+   "ms": 948
+  },
+  {
+   "tool": "add_line",
+   "ok": true,
+   "ms": 425
+  },
+  {
+   "tool": "export",
+   "ok": true,
+   "ms": 212
+  },
+  {
+   "tool": "write_data",
+   "ok": true,
+   "ms": 289
+  },
+  {
+   "tool": "plot",
+   "ok": true,
+   "ms": 459
+  },
+  {
+   "tool": "export_delivery",
+   "ok": true,
+   "ms": 1083
+  },
+  {
+   "tool": "plot_file",
+   "ok": true,
+   "ms": 959
   },
   {
    "tool": "labtalk(read)",
    "ok": true,
-   "ms": 125
+   "ms": 45
   },
   {
    "tool": "labtalk(write+read)",
    "ok": true,
-   "ms": 184
+   "ms": 43
   }
  ],
  "summary": {

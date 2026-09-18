@@ -408,6 +408,46 @@ def _synchronized(fn):
 # ---------------------------------------------------------------------------
 # 连接（以下 *_impl 函数只在 COM 线程内执行）
 # ---------------------------------------------------------------------------
+def _safe_find_graph(op, name=None):
+    """安全版 op.find_graph —— 绕过 originpro 1.1.15 的库缺陷。
+
+    实测（2026-09-18 用户现场，Origin 2024 SR1）：originpro 1.1.15 的
+    find_graph(name) 会抛 **TypeError**——它把对象传给了只接受 int/str 的 Pages()。
+    这里先走库方法，抛 TypeError 时退化为遍历页面按短名匹配；都失败返回 None
+    （上层按 graph_not_found 处理，**不让异常冒泡**）。
+    """
+    if op is None:
+        return None
+    try:
+        return op.find_graph(name) if name else op.find_graph()
+    except TypeError:
+        pass
+    except Exception:
+        return None
+
+    def _short(gp):
+        try:
+            return str(gp.GetName() if hasattr(gp, "GetName") else getattr(gp, "name", ""))
+        except Exception:
+            return ""
+    try:
+        pages = op.pages() if hasattr(op, "pages") else None
+        if pages is None:
+            return None
+        for pg in pages:
+            try:
+                if name is None:
+                    if "Graph" in _short(pg):
+                        return pg
+                elif _short(pg).split("]")[-1].lower() == str(name).lower():
+                    return pg
+            except Exception:
+                continue
+    except Exception:
+        return None
+    return None
+
+
 def _origin_running():
     """探测 Origin 主进程是否在运行（仅提示用，不阻塞）。"""
     try:
@@ -749,7 +789,7 @@ def _delete_graph_page(graph_name):
     """按短名删除图页（幂等命名用）。返回是否已删除。"""
     op = _origin_app
     try:
-        gp = op.find_graph(graph_name)
+        gp = _safe_find_graph(op, graph_name)
         if gp is not None:
             gp.destroy()
             return True
@@ -1100,7 +1140,7 @@ def _export_impl(graph, file_path=None, fmt="png", width=1200, output_dir=None):
             return oerr.fail("invalid_request",
                              f"fmt 只支持 png/svg/pdf/tif/emf/eps，收到 {fmt!r}")
 
-        gp = op.find_graph(graph)
+        gp = _safe_find_graph(op, graph)
         if not gp:
             return oerr.fail("graph_not_found", f"图不存在: {graph}")
 
@@ -1497,7 +1537,7 @@ def _fit_impl(worksheet, x_column, y_column, kind="linear", plot_curve=True,
         if plot_curve and curves:
             wc = op.find_sheet("w", curves)
             if graph:
-                gp = op.find_graph(graph)
+                gp = _safe_find_graph(op, graph)
                 if not gp:
                     return {**result, "warning": f"图不存在: {graph}，未添加拟合曲线"}
             else:
@@ -1867,7 +1907,7 @@ def _peak_fit_impl(worksheet, x_column, y_column, n_peaks=1, kind="gauss",
                     ws2.from_list(2 + i, [round(float(v), 8) for v in yc],
                                   lname=f"peak_{i + 1}")
             if graph:
-                gp = op.find_graph(graph)
+                gp = _safe_find_graph(op, graph)
             else:
                 gp = None
             if gp is None:
@@ -1993,7 +2033,7 @@ def _add_line_impl(graph, orientation="vertical", at=None, slope=None,
         if not ok:
             return conn
         op = _origin_app
-        gp = op.find_graph(graph)
+        gp = _safe_find_graph(op, graph)
         if gp is None:
             return oerr.fail("graph_not_found", f"图不存在: {graph}", graph=graph)
         gl, _ = safe_call(gp.__getitem__, int(layer or 0))
@@ -2339,7 +2379,7 @@ def _plot3d_impl(data, plot_type="surface", fmt="png", file_path=None, width=120
                 return oerr.fail(
                     "unsupported_origin_feature",
                     "3D 散点图创建失败（plotxy 310 在当前 Origin 上无输出，可改用 origin_plot3d 的 surface）")
-            gp = op.find_graph(gname)
+            gp = _safe_find_graph(op, gname)
             if not gp:
                 return oerr.fail("origin_operation_error", f"3D 散点图创建失败: {gname}",
                                  gname=gname)
@@ -3140,7 +3180,7 @@ def _apply_style_impl(graph, plot_type=None, columns=None, style_mode="default",
     """
     try:
         op = _origin_app
-        gp = op.find_graph(graph)
+        gp = _safe_find_graph(op, graph)
         if gp is None:
             return oerr.fail("graph_not_found", f"图不存在: {graph}", graph=graph)
         gl = gp[0]
@@ -3418,7 +3458,7 @@ def _list_graphs_impl():
         for i in range(n):
             try:
                 name = str(op.po.Pages(i).GetName())
-                if op.find_graph(name) is not None:
+                if _safe_find_graph(op, name) is not None:
                     names.append(name)
             except Exception:
                 pass
@@ -3533,17 +3573,111 @@ def _diagnose_impl(connect_probe=False):
     if not dir_ok:
         recs.append(f"默认导出目录不可写（{dir_detail}）：导出时显式传 file_path 或 output_dir")
 
-    # 6) 可选：真实连接探针（会启动/连接 Origin，5~45 秒）
+    # 5.5) Origin 自动化能力探测（2026-09-18 用户现场实证：Origin 2024 SR1 上
+    # 「新建文档窗口」与「导出文件」两类操作被运行时静默禁用——newbook/expGraph
+    # 一律返回 False 且不报错，排查花了半小时。这里提前探测，一次说清楚。）
     if connect_probe:
-        rconn = connect()
-        if isinstance(rconn, tuple) and len(rconn) == 2 and isinstance(rconn[1], dict):
-            rconn = rconn[1]
-        checks["connect_probe"] = rconn
-        if isinstance(rconn, dict) and not rconn.get("ok"):
+        # 注意：_diagnose_impl 本身运行在 COM 线程内，**必须调裸 _connect_impl**，
+        # 调 @_synchronized 包装的 connect() 会二次投递队列导致死锁（项目纪律）。
+        ok_c, conn0 = _connect_impl()
+        if isinstance(conn0, tuple) and len(conn0) == 2 and isinstance(conn0[1], dict):
+            conn0 = conn0[1]
+        if ok_c:
+            checks["automation_capability"] = _probe_automation_capability()
+            ac = checks["automation_capability"]
+            if not ac.get("all_ok"):
+                report["ok"] = False
+                recs.append(
+                    "Origin 自动化能力受限：" + "；".join(ac.get("issues") or [])
+                    + " ——命令行/GUI 手动试一次：Origin 里手动新建工作簿并导出 PNG；"
+                      "手动也失败说明安装损坏 → 控制面板 → Origin → 更改 → 修复；"
+                      "手动成功说明只是 COM 附加模式受限 → 让 AI 只写数据、图上你在 GUI 里导出")
+        checks["connect_probe"] = conn0
+        if not ok_c:
             report["ok"] = False
+    else:
+        recs.append("需要判断 Origin 是否能真正建图/导出时，带 connect_probe=true 重跑"
+                    "（会额外做新建窗口与导出能力探测，5~45 秒）")
 
     report["recommendations"] = recs
     return report
+
+
+def _probe_automation_capability():
+    """探测 Origin 自动化是否真的可用：新建文档窗口 + 导出文件。
+
+    两类操作在某些受限运行时（实证：Origin 2024 SR1 受限模式）会**静默失败**——
+    命令返回 False 但不抛异常，导致上层以为"执行了"却没有产物。
+    这里主动试探，把"静默失败"变成"明确报告"。
+    """
+    issues, detail = [], {}
+    op = _origin_app
+    # a) 新建工作簿能力
+    try:
+        wks = op.new_sheet("w", "DSH_CAP_PROBE")
+        ok_new = wks is not None
+    except Exception as e:
+        ok_new, wks = False, None
+        detail["newdoc_error"] = str(e)[:120]
+    if wks is not None:
+        try:
+            wks.destroy()
+        except Exception:
+            try:
+                op.po.LT_execute("window -c DSH_CAP_PROBE;")
+            except Exception:
+                pass
+    detail["new_doc"] = bool(ok_new)
+    if not ok_new:
+        issues.append("newbook/新建工作表 被静默拒绝")
+
+    # b) 导出能力：建临时图 → 导出 → 校验文件（不依赖 __LASTEXP 变量回读，
+    #    因为受限环境下系统变量读不出来，只返回空串——实证坑）
+    ok_exp, exp_file = False, None
+    try:
+        import tempfile
+        tmpdir = tempfile.mkdtemp(prefix="dsh_exp_probe_")
+        gp = None
+        try:
+            wks2 = op.new_sheet("w", "DSH_EXP_PROBE")
+            if wks2 is not None:
+                try:
+                    wks2.from_list(0, [1.0, 2.0, 3.0], lname="x")
+                    wks2.from_list(1, [1.0, 4.0, 9.0], lname="y")
+                except Exception:
+                    pass
+                gp = op.new_graph(lname="DSH_EXP_GRAPH")
+                gl = gp[0] if gp else None
+                if gl is not None:
+                    try:
+                        gl.add_plot(wks2, 1, 0)
+                        gl.rescale()
+                    except Exception:
+                        pass
+        except Exception:
+            gp = None
+        if gp is not None:
+            exp_file = os.path.join(tmpdir, "probe.png")
+            try:
+                gp.save_fig(exp_file, width=600)
+            except Exception:
+                pass
+            ok_exp = bool(exp_file and os.path.isfile(exp_file)
+                          and os.path.getsize(exp_file) > 0)
+            try:
+                op.po.LT_execute("window -c DSH_EXP_GRAPH; window -c DSH_EXP_PROBE;")
+            except Exception:
+                pass
+    except Exception as e:
+        detail["export_error"] = str(e)[:120]
+    detail["export"] = bool(ok_exp)
+    detail["export_probe_file"] = exp_file
+    if not ok_exp:
+        issues.append("expGraph/导出 被静默拒绝（或只产生空文件）")
+
+    return {"all_ok": not issues, "issues": issues, "detail": detail,
+            "note": ("探测用临时对象已清理。这两类操作失败时 Origin 不报错——"
+                     "上层一律以「文件是否真的落盘」裁决，不信任通道返回值。")}
 
 
 # ---------------------------------------------------------------------------
@@ -3876,9 +4010,12 @@ def _export_delivery_impl(graph, source_path=None, output_dir=None, fmts="png,pd
 
 
 def op_find_graph(graph):
-    """COM 线程内的图页查找（供交付/验证路径复用）。"""
+    """COM 线程内的图页查找（供交付/验证路径复用）。
+
+    走 _safe_find_graph：规避 originpro 1.1.15 的 find_graph TypeError 缺陷。
+    """
     try:
-        return _origin_app.find_graph(graph)
+        return _safe_find_graph(_origin_app, graph)
     except Exception:
         return None
 
@@ -4758,7 +4895,7 @@ def _manage_plots_impl(graph, action, plot_index=0,
         if not ok:
             return conn
         op = _origin_app
-        gp = op.find_graph(graph)
+        gp = _safe_find_graph(op, graph)
         if not gp:
             return oerr.fail("graph_not_found",
                              f"图不存在: {graph}", graph=graph)

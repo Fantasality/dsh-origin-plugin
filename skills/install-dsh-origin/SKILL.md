@@ -26,8 +26,12 @@ description: 帮用户把 dsh-origin-plugin（AI 驱动 OriginLab Origin 画图�
 | 检查 | 怎么查 | 不满足怎么办 |
 |---|---|---|
 | Windows | `echo %OS%` 或看系统 | 不支持——Origin 只在 Windows |
-| 装了 Origin | 找 `C:\Program Files\OriginLab\Origin20*\Origin64.exe`；或让用户打开 Origin 看版本 | 让用户先装正版 Origin（2021+，推荐 2026） |
-| Python 3.10+ | `python --version` | 让用户装 Python 并勾 "Add to PATH" |
+| 装了 Origin | **按序快查，别一上来就全盘递归**（全盘 `-Recurse` 搜 Origin64.exe 要几分钟，实测坑）:<br>① `Get-ItemProperty HKLM:\SOFTWARE\OriginLab\* -ErrorAction SilentlyContinue`<br>② `Get-ChildItem 'C:\Program Files\OriginLab','C:\Program Files (x86)\OriginLab' -Filter Origin64.exe -Recurse -Depth 3 -EA 0`<br>③ 用户自定义盘：`Get-ChildItem 'D:\OriginLab*','D:\Origin*' -Filter Origin64.exe -Recurse -Depth 3 -EA 0`<br>④ 问用户："你的 Origin 装在哪个盘？"（最快） | 让用户先装正版 Origin（2021+，推荐 2026） |
+| Python 3.10+ | `python --version`；没有就试 `py -3 --version`、`where.exe python` | 让用户装 Python 并勾 "Add to PATH" |
+| npm（可选） | `npm --version`（没有也能装：走源码/zip 方式） | 可选——没有 npm 就让用户下载 release 包解压 |
+
+**找不到就问，不要死磕**：三条快查都没结果时，直接问用户"Origin 装在哪台机器/哪个盘"，
+比重试十次全盘搜索快得多。
 
 **Origin 可以不开着**——插件会在首次调用时自动拉起它。
 
@@ -55,9 +59,11 @@ cd dsh-origin-plugin
 ```
 此时 `<PKG_DIR>` 就是这个 clone 出来的目录。
 
-> ⚠️ **版本陷阱（很常见）**：DSH 插件市场里可能显示 **2.2.1** 之类的旧版本（目录源缓存导致）。
-> 想装最新就**显式指定版本**：`npm install -g dsh-origin-plugin@2.7.0`。
-> 已经装了旧版就先 `npm uninstall -g dsh-origin-plugin` 再装指定版本。
+> ⚠️ **版本陷阱（很常见）**：DSH 插件市场里显示的版本可能滞后（目录源缓存导致）。
+> **不要指定具体版本号**（本手册不锁版本，写死版本只会随时间过期）。
+> 想拿最新版就**不写版本**：`npm install -g dsh-origin-plugin`（默认 latest）。
+> 已经装了旧版就先 `npm uninstall -g dsh-origin-plugin` 再重装。
+> 需要确认装到的是哪一版：`npm view dsh-origin-plugin version`。
 
 ---
 
@@ -65,11 +71,17 @@ cd dsh-origin-plugin
 
 插件靠 Python 连 Origin，配置里必须写**绝对路径**（写 `python` 经常指向错误环境）。
 
-找一个**装了 originpro 的** Python：
+找一个**装了插件全部依赖的** Python（不只是 originpro——插件运行还需要 MCP SDK 等）：
 ```bash
 python -c "import originpro; print('OK')"
 ```
-- 报 `ModuleNotFoundError` → 装依赖：`pip install originpro pywin32 numpy openpyxl pyyaml pillow`
+- 缺依赖 → **一步装全**（推荐，别一个个装）：
+  ```
+  pip install -r <PKG_DIR>\requirements.txt
+  ```
+  至少包含 `originpro pywin32 numpy openpyxl pyyaml pillow` 与 MCP 运行时依赖。
+  **注意**：同一个 Python 若被切换过版本（如客户端自带 runtime 升级），依赖会丢失，
+  需要重装一次（实测坑：Codex 换 runtime 后 `mcp` 包不见了）。
 - 不通就用项目自带的 venv：`python -m venv .venv && .venv\Scripts\pip install -r requirements.txt`
 
 记下这个 python.exe 的**绝对路径**（`where python` 可查），记作 **`<PYTHON>`**。
@@ -277,7 +289,8 @@ python origin_mcp_server.py --offline-test  # 引擎自检（不连 Origin）
 | `origin_status` 报连不上 | 先跑 `python origin_mcp_server.py --selftest`；Origin 没开时插件会自动拉起，等 10-20 秒再试 |
 | COM 注册问题 | 以**管理员**运行一次 Origin（会自动修复 COM 注册），然后重开 |
 | 中文路径/中文列名乱码 | 已内置处理；仍异常就把数据移到纯英文路径 |
-| 装到旧版本（2.2.1 等） | 见第 1 步的版本陷阱：显式 `@2.7.0` 安装 |
+| 装到旧版本 | 见第 1 步的版本陷阱：**不带版本号重装**（默认 latest）；`npm view dsh-origin-plugin version` 可查当前最新 |
+| 装完客户端里看不到工具 | ①**完全退出并重启**客户端（改 MCP 配置必须重启才生效）②确认配置 JSON 语法正确（反斜杠转义）③问用户"能否看到 dsh-origin 这个 MCP 服务器"④仍不行就用手册第 3 步给的那句话**让客户端自己配** |
 | 卡在弹窗不动 | 插件有看门狗会自动点掉；还卡就手动关掉 Origin 的对话框 |
 | 某个功能"不支持" | 是**真的**不支持，不是配置问题——查 `<PKG_DIR>\COMPATIBILITY.md`（15 条实测失败场景，附替代方案） |
 

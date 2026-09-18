@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dsh-origin-plugin"
-version = "2.7.1"
+version = "2.7.2"
 description = "DSH Origin Plugin: drive Origin scientific plotting from AI chat via MCP (60 tools; works standalone via stdio)"
 readme = "README.md"
 requires-python = ">=3.10"

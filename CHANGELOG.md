@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.7.2 (2026-09-18)
+
+**两份真实使用过程（Codex 按手册安装会话 + Origin 2024 SR1 导出故障复盘）暴露的 bug 修复。**
+
+### 修复
+1. **find_graph TypeError（originpro 1.1.15 库缺陷）**：该版本 `find_graph(name)` 会把
+   对象传给只接受 int/str 的 `Pages()` 而抛 TypeError。新增 `_safe_find_graph()`
+   （先走库方法，TypeError 时退化为遍历页面按短名匹配），替换引擎内 8 处裸调用，
+   `op_find_graph` 统一复用——异常不再冒泡，找不到图一律返回 `graph_not_found`。
+2. **Origin 自动化能力不再"静默失败"**：Origin 2024 SR1 上出现过「新建文档窗口」与
+   「导出文件」两类操作被运行时静默禁用（`newbook`/`expGraph` 一律返回 False 且不报错，
+   排查花了半小时）。`origin_diagnose(connect_probe=true)` 新增 **automation_capability
+   探测**：主动试建临时表与临图导出，以"文件是否真的落盘"裁决（不信任通道返回值，
+   也不依赖读不出来的 LabTalk 系统变量），失败时明确报「Origin 自动化能力受限」
+   并给修复路径（控制面板修复安装 / 或只写数据、GUI 导出）。
+3. **潜在死锁**：`_diagnose_impl` 运行在 COM 线程内却调用了 `@_synchronized` 包装的
+   `connect()`，改为裸 `_connect_impl()`（项目纪律：COM 线程内不得调包装函数）。
+
+### 文档
+- install-dsh-origin SKILL：**去掉写死的版本号**（不锁版本，默认 latest 即最新）；
+  第 0 步改为"快查优先、不要一上来全盘递归搜 Origin64.exe"（Codex 会话实测全盘
+  `-Recurse` 极慢）；第 2 步强调 `pip install -r requirements.txt` 装全套依赖
+  （客户端 runtime 切换后依赖会丢失，实测坑）；排障表补"客户端看不到工具"处置。
+- README 顶部增加分发渠道与适配徽章（npm / GitHub 动态徽章 + dshfind / 1024Store /
+  npmmirror 收录 + Windows / Origin / Python 适配）。
+
+### 验证
+冒烟 6/6（diagnose 探测不卡死 + 能力探测 + find_graph 安全包装 + 不存在的图不崩）；
+回归 offline + pytest 15 + 四 SKILL 一致性 + selftest + fine-edit + repro +
+chem v2 15/15 + 视觉基准 22/22 全绿。
+
 ## 2.7.1 (2026-09-17)
 
 **标注盲试治理 + Nature 预设 + 静默陷阱门禁**（甲烷 NMR 案例复盘：150+ 轮/30 分钟）。
