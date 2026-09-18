@@ -42,7 +42,7 @@
 
 - 🤖 对话触发：`「用 Origin 画 y=x² 折线图并导出 PNG」` → 模型自动调用工具 → 图片落盘
 - 🔌 **双形态接入**：DSH 内经官方 `@deepseek-ai/dsh-mcp-client` 桥接为原生工具；DSH 外经 **`origin_mcp_stdio.py`** 接入任何标准 MCP 客户端（Kimi Code / Cursor / Claude Desktop / WorkBuddy），或 `npx dsh-origin-plugin` 直接拉起
-- 🎨 **62 个工具**：2D 图 line/scatter/line_symbol/column/**histogram/box/bar** + 误差棒、3D、等高线、统计批、拟合参数级控制、矩阵工具、matplotlib 桥、PPT 组图
+- 🎨 **74 个工具**：2D 图 line/scatter/line_symbol/column/**histogram/box/bar** + 误差棒、3D、等高线、统计批、拟合参数级控制、矩阵工具、matplotlib 桥、PPT 组图
 - 📋 **计划确认流（防陈旧）**：`origin_plot_plan` 逐列画像+待确认问题+`plan_hash` → `origin_execute_plan`（数据/映射变了报 `plan_stale`，语义不明/发表级/多组对比强制走此流）
 - 🩺 **系统自检**：`origin_diagnose`——Origin 安装 / COM 注册 / 残留进程 / 导出目录权限，连不上先调它
 - 📖 **场景速查**：`origin_cookbook`——八场景调用链 + 高频工具推荐默认参数（离线秒回）
