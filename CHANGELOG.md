@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.7.3 (2026-09-18) — 热修（P0）
+
+**修复 issue #1：装了插件后 DSH 完全无法启动（`TypeError: Invalid effect`）。**
+
+`index.js` 的 `apply()` 最后一行 `return { ...plugin }` 返回了**普通对象**；
+cordis 会把 `apply()` 的返回值当 effect 处理，普通对象不是合法 effect，
+DSH ≥ 0.1.5 在加载插件树时直接抛 `Invalid effect` 并退出——
+用户只能手动把插件从 profile 里删掉才能重新启动 DSH。
+
+- 修复：`apply()` 不再返回值（改为 `return void 0`）。插件描述已由 `describe()`
+  单独导出，此处无需返回；`ctx.effect(...)` 的清理钩子不受影响，语义完全一致。
+- 新增冒烟 `smoke/issue1_apply_effect.mjs`：用 **DSH 内置的真实 cordis** 验证
+  apply() 返回值契约（必须是 nullable）+ cordis 能挂载插件（兼容性）。
+  **双向验证过**：修补后 PASS；把返回值改回普通对象的副本 → FAIL（测试有效）。
+
+感谢 @Torbernite009 提交 issue（附根因分析与复现验证）。
+
 ## 2.7.2 (2026-09-18)
 
 **两份真实使用过程（Codex 按手册安装会话 + Origin 2024 SR1 导出故障复盘）暴露的 bug 修复。**

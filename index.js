@@ -73,6 +73,10 @@ export default {
         } catch { /* unload must never throw */ }
       })
     }
-    return { ...plugin }
+    // 必须**不返回任何值**（返回值 undefined）。
+    // cordis 会把 apply() 的返回值当 effect 处理：返回普通对象（如插件描述符）
+    // 会抛 `TypeError: Invalid effect`，导致 DSH 启动直接崩溃（issue #1 实证，
+    // DSH ≥ 0.1.5 必现）。插件描述已由 describe() 单独导出，这里无需再返回。
+    return void 0
   },
 }
