@@ -10,7 +10,7 @@
 > git clone https://github.com/Fantasality/dsh-origin-plugin.git
 > ```
 > 没装 git 的话，也可以直接下载压缩包解压：
-> https://github.com/Fantasality/dsh-origin-plugin/archive/refs/tags/v2.7.0.zip
+> https://github.com/Fantasality/dsh-origin-plugin/archive/refs/tags/v2.7.3.zip
 > （国内下载慢就用加速：把网址开头换成 `ghproxy.com/`）
 >
 > 拿到之后，你会有一个叫 `dsh-origin-plugin` 的文件夹——下面方式一、方式四都要用它。
